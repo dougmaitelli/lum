@@ -8,8 +8,12 @@ StartLimitBurst=5
 Type=exec
 ExecStart=/usr/bin/lum serve
 EnvironmentFile=-/etc/lum/lum.env
+# Use a preallocated service identity for /opt. Keep DynamicUser sandboxing and
+# the existing private StateDirectory (including systemd's ownership mapping).
 DynamicUser=yes
-User=lum
+User=lum-svc
+Environment=LUM_RUNTIME_ROOT=/opt/lum/runtimes
+ReadWritePaths=/opt/lum/runtimes
 SupplementaryGroups=render video
 StateDirectory=lum
 StateDirectoryMode=0700

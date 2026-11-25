@@ -26,7 +26,16 @@ impl Runtime {
             );
             return Ok(Self::External(bin));
         }
-        Ok(Self::Managed(state.join("runtimes").join(VERSION)))
+        // The packaged unit supplies a private executable store. Foreground runs
+        // keep their existing per-user layout unless an explicit root is set.
+        let root = env::var_os("LUM_RUNTIME_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state.join("runtimes"));
+        ensure!(
+            root.is_absolute(),
+            "LUM_RUNTIME_ROOT must be an absolute directory"
+        );
+        Ok(Self::Managed(root.join(VERSION)))
     }
     pub fn bin(&self) -> PathBuf {
         match self {
@@ -91,13 +100,33 @@ async fn verify(bin: &Path) -> Result<()> {
             tool,
             30,
         )
-        .await?;
+        .await
+        .with_context(|| format!("Checking {}", bin.join(tool).display()))?;
     }
     Ok(())
 }
 async fn install(dir: &Path) -> Result<()> {
-    // The service holds the state directory instance lock throughout. Never move
-    // a completed venv: Python entry points contain absolute interpreter paths.
+    // Never move a completed venv: entry points contain absolute paths.
+    let root = dir.parent().context("Missing SDK root")?;
+    tokio::fs::create_dir_all(root)
+        .await
+        .with_context(|| format!("Create SDK root {}", root.display()))?;
+    let slot = if dir.exists() { dir } else { root };
+    let flags = rustix::fs::statvfs(slot)
+        .with_context(|| format!("Inspect SDK mount for {}", slot.display()))?
+        .f_flag;
+    ensure!(
+        !flags.contains(rustix::fs::StatVfsMountFlags::NOEXEC),
+        "SDK location {} is mounted noexec in Lum's namespace. Use a dedicated executable LUM_RUNTIME_ROOT, not the model data mount.",
+        slot.display()
+    );
+    let lock = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join(".provision.lock"))?;
+    lock.try_lock()
+        .context("Another instance is provisioning this SDK store")?;
     let marker = dir.join("installed.lock");
     if fs::read_to_string(&marker).ok().as_deref() == Some(LOCK)
         && verify(&dir.join("bin")).await.is_ok()
@@ -145,4 +174,30 @@ async fn install(dir: &Path) -> Result<()> {
     verify(&dir.join("bin")).await?;
     tokio::fs::rename(&pending, &marker).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn refuses_noexec_before_modifying_an_existing_slot() -> Result<()> {
+        // /dev/shm is normally noexec on Linux. The package CI separately
+        // forces noexec on StateDirectory and exercises a real service boot.
+        let shm = Path::new("/dev/shm");
+        if !rustix::fs::statvfs(shm)
+            .is_ok_and(|s| s.f_flag.contains(rustix::fs::StatVfsMountFlags::NOEXEC))
+        {
+            return Ok(());
+        }
+        let root = tempfile::tempdir_in(shm)?;
+        let slot = root.path().join(VERSION);
+        fs::create_dir(&slot)?;
+        let sentinel = slot.join("existing");
+        fs::write(&sentinel, "preserve")?;
+        let err = install(&slot).await.unwrap_err();
+        assert!(err.to_string().contains("mounted noexec"), "{err:#}");
+        assert_eq!(fs::read_to_string(sentinel)?, "preserve");
+        Ok(())
+    }
 }

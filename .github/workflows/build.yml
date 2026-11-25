@@ -38,6 +38,7 @@ jobs:
             /usr/bin/lum --help
             systemctl is-enabled lum.service
             test -f /etc/lum/lum.env
+            test "$(stat -c %U:%G:%a /opt/lum/runtimes)" = lum-svc:lum-svc:700
             # Exercise the same unit-free path offered by the manual tarball.
             LUM_DEVICE=task XDG_DATA_HOME=/tmp/lum-ci /usr/bin/lum run >/tmp/lum.log 2>&1 & pid=$!
             for i in $(seq 1 180); do grep -q "Lum library:" /tmp/lum.log && break; sleep 1; done
@@ -54,7 +55,7 @@ jobs:
           test ! -e /opt/lum/runtime
           # A CPU-only runner needs neither GPU group membership nor an AMD device.
           sudo mkdir -p /etc/systemd/system/lum.service.d
-          printf '[Service]\nSupplementaryGroups=\nEnvironmentFile=\nEnvironment=LUM_DEVICE=task\n' | sudo tee /etc/systemd/system/lum.service.d/ci.conf
+          printf '[Service]\nSupplementaryGroups=\nEnvironmentFile=\nEnvironment=LUM_DEVICE=task\nNoExecPaths=/var/lib/lum\n' | sudo tee /etc/systemd/system/lum.service.d/ci.conf
           sudo apt-get install -y ./dist/*.deb
           systemctl is-enabled lum.service
           systemd-analyze verify lum.service
@@ -64,6 +65,21 @@ jobs:
           done
           grep -q 'Model library' "$RUNNER_TEMP/library.html" || { sudo journalctl -u lum --no-pager; exit 1; }
           sudo curl --fail --unix-socket /run/lum/engine.sock http://localhost/readyz
+          pid=$(systemctl show -p MainPID --value lum.service)
+          sudo nsenter -t "$pid" -m -- findmnt -T /var/lib/lum -n -o OPTIONS | tr ',' '\n' | grep -Fx noexec
+          sudo test -f /var/lib/lum/library.sqlite
+          sudo test ! -e /var/lib/lum/runtimes
+          sudo test -x /opt/lum/runtimes/0.3.0/bin/loom-serve
+          # Restart must reuse the verified SDK without reinstalling.
+          installed=$(sudo stat -c '%i:%y' /opt/lum/runtimes/0.3.0/installed.lock)
+          sudo systemctl restart lum.service
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9390/ -o "$RUNNER_TEMP/library.html" && grep -q 'Model library' "$RUNNER_TEMP/library.html" && break
+            sleep 1
+          done
+          grep -q 'Model library' "$RUNNER_TEMP/library.html"
+          sudo curl --fail --unix-socket /run/lum/engine.sock http://localhost/readyz
+          test "$installed" = "$(sudo stat -c '%i:%y' /opt/lum/runtimes/0.3.0/installed.lock)"
           # Fixture tests run unprivileged with an independent SDK, not the service's private state.
           /usr/bin/python3 -m venv "$RUNNER_TEMP/fixtures"
           "$RUNNER_TEMP/fixtures/bin/python" -m pip install --require-hashes --only-binary=:all: -r runtimes/hrx-loom-0.3.0.lock

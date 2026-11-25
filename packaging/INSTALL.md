@@ -8,7 +8,7 @@ The service starts the Lum web library on **127.0.0.1:9390** and one private Loo
 
 **These instructions apply to v0.1.1 and later.** The original v0.1.0 release requires an external SDK; see its [version-specific guide](https://github.com/dougmaitelli/lum/blob/v0.1.0/packaging/INSTALL.md).
 
-Do not install Loom or uv for Lum. The RPM/DEB installs the OS Python prerequisites; on a manual tarball installation supply `/usr/bin/python3` (3.12+) with venv and ensurepip (`python3-venv` on Debian/Ubuntu; `python3` and `python-pip-wheel` on Fedora). On first start Lum downloads the hash-locked hrx-loom 0.3.0 wheels and Hugging Face dependencies from PyPI as the unprivileged service account. The library URL shows setup status and allows retry on failure. Subsequent starts reuse the verified runtime without network access. Model downloads are separate. For restricted networks an administrator may instead specify `LUM_RUNTIME_BIN=/absolute/service-readable/bin` in `lum.env`; Lum never modifies an external SDK. No personal uv install is searched or changed.
+Do not install Loom or uv for Lum. The RPM/DEB installs the OS Python prerequisites; on a manual tarball installation supply `/usr/bin/python3` (3.12+) with venv and ensurepip (`python3-venv` on Debian/Ubuntu; `python3` and `python-pip-wheel` on Fedora). On first start Lum downloads the hash-locked hrx-loom 0.3.0 wheels and Hugging Face dependencies from PyPI as the unprivileged service account. The system service provisions executable SDKs under `/opt/lum/runtimes/<version>/` as `lum-svc`; models and SQLite stay under `/var/lib/lum` and may be on a `noexec` mount. On upgrade a previously installed or partial SDK under `/var/lib/lum/runtimes` is ignored, not moved (venvs contain absolute paths). Lum reinstalls the verified SDK once at the new path without deleting or migrating the model library. The library URL shows setup status and allows retry on failure. Subsequent starts reuse the verified runtime without network access. Model downloads are separate. For restricted networks an administrator may instead specify `LUM_RUNTIME_BIN=/absolute/service-readable/bin` in `lum.env`; Lum never modifies an external SDK. No personal uv install is searched or changed.
 
 **Just testing?** After extracting the updated manual tarball, run `./lum run` as your normal user and open the printed URL. No systemd installation is needed. It uses `$XDG_DATA_HOME/lum` (default `~/.local/share/lum`) for the library and versioned runtimes, and `$XDG_RUNTIME_DIR/lum` for the private engine socket when available. Stop with Ctrl-C. To test without an AMD GPU use `LUM_DEVICE=task ./lum run`.
 
@@ -40,13 +40,17 @@ cd lum-*-linux-x86_64
 sudo install -Dm755 lum /usr/bin/lum
 sudo install -Dm644 lum.service /usr/lib/systemd/system/lum.service
 sudo install -Dm644 INSTALL.md /usr/share/doc/lum/INSTALL.md
+sudo install -Dm644 sysusers.d/lum.conf /usr/lib/sysusers.d/lum.conf
+sudo install -Dm644 tmpfiles.d/lum.conf /usr/lib/tmpfiles.d/lum.conf
+sudo systemd-sysusers lum.conf
+sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/lum.conf
 # Keep local configuration on subsequent installations.
 if ! test -f /etc/lum/lum.env; then sudo install -Dm644 lum.env /etc/lum/lum.env; fi
 sudo systemctl daemon-reload
 sudo systemctl enable --now lum.service
 ```
 
-For a manual upgrade, repeat the file installation, reload units, and `sudo systemctl restart lum.service` to use the new binary. To install manually **from source**, run `cargo build --locked --release`, then use `target/release/lum`, `packaging/lum.service`, `packaging/lum.env` and `packaging/INSTALL.md` as the four source files in the same `install` commands.
+For a manual upgrade, repeat the file installation, reload units, and `sudo systemctl restart lum.service` to use the new binary. To install manually **from source**, run `cargo build --locked --release`, then use `target/release/lum` for the binary and the corresponding files under `packaging/` for all other sources in the same commands.
 
 ## 3. Verify and configure
 
@@ -83,8 +87,9 @@ Use `sudo dnf remove lum` or `sudo apt purge lum`. For a manual install:
 
 ```sh
 sudo systemctl disable --now lum.service
-sudo rm -f /usr/bin/lum /usr/lib/systemd/system/lum.service /usr/share/doc/lum/INSTALL.md
+sudo rm -f /usr/bin/lum /usr/lib/systemd/system/lum.service /usr/share/doc/lum/INSTALL.md \
+  /usr/lib/sysusers.d/lum.conf /usr/lib/tmpfiles.d/lum.conf
 sudo systemctl daemon-reload
 ```
 
-Managed runtimes under `/var/lib/lum/runtimes/`, any legacy `/opt/lum/runtime`, local overrides, and persistent state are not deleted automatically. Back up state before intentionally removing it. Do not rely on a dynamic service UID for manual ownership of files outside systemd-managed directories.
+The `lum-svc` system account, managed runtimes under `/opt/lum/runtimes/`, any older SDK directories, local overrides, and persistent state are not deleted automatically. Back up state before intentionally removing it. Do not rely on a dynamic service UID for manual ownership of files outside systemd-managed directories.

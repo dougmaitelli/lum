@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 if [ "$1" = configure ]; then
+    systemd-sysusers lum.conf
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/lum.conf
     deb-systemd-helper unmask lum.service >/dev/null || true
     if deb-systemd-helper --quiet was-enabled lum.service; then
         deb-systemd-helper enable lum.service >/dev/null

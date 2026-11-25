@@ -1,5 +1,7 @@
 #!/bin/sh
 set -e
+systemd-sysusers lum.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/lum.conf
 # On an upgrade, do not re-enable a unit the administrator disabled.
 if [ "$1" -eq 1 ]; then
     systemctl --no-reload enable lum.service

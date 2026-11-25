@@ -13,6 +13,8 @@ trap 'rm -rf "$stage"' EXIT
 mkdir "$stage/$name" "$stage/out"
 install -m755 target/release/lum "$stage/$name/"
 install -m644 packaging/{INSTALL.md,lum.env,lum.service} "$stage/$name/"
+install -Dm644 packaging/sysusers.d/lum.conf "$stage/$name/sysusers.d/lum.conf"
+install -Dm644 packaging/tmpfiles.d/lum.conf "$stage/$name/tmpfiles.d/lum.conf"
 tar czf "$stage/out/$name.tar.gz" -C "$stage" "$name"
 for format in deb rpm; do
     nfpm package --config packaging/nfpm.yaml --packager "$format" --target "$stage/out/"

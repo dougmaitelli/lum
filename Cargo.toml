@@ -1,6 +1,6 @@
 [package]
 name = "lum"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [dependencies]
@@ -9,7 +9,7 @@ maud = { version = "0.27", features = ["axum"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-rustix = { version = "1", features = ["process"] }
+rustix = { version = "1", features = ["fs", "process"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "process", "rt", "signal", "time", "net", "fs", "sync"] }

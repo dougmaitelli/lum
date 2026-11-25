@@ -15,6 +15,10 @@ contents:
       mode: 0755
   - src: packaging/lum.service
     dst: /usr/lib/systemd/system/lum.service
+  - src: packaging/sysusers.d/lum.conf
+    dst: /usr/lib/sysusers.d/lum.conf
+  - src: packaging/tmpfiles.d/lum.conf
+    dst: /usr/lib/tmpfiles.d/lum.conf
   - src: packaging/lum.env
     dst: /etc/lum/lum.env
     type: config|noreplace
