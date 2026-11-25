@@ -147,7 +147,10 @@
   {#each turns as turn, i (i)}
     <article class="message" data-role={turn.role}>
       <strong>{turn.role === "user" ? "You" : "Response"}</strong>
-      <MessageContent content={turn.content} />
+      <MessageContent
+        content={turn.content}
+        streaming={busy && turn.role === "assistant" && i === turns.length - 1}
+      />
     </article>
   {/each}
 </section>

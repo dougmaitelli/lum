@@ -252,6 +252,51 @@ test("Stop interrupts a live reply and keeps the visible text", async ({
   ).toBeEnabled();
 });
 
+test("stopping in a streaming code fence preserves the final highlighted prefix", async ({
+  page,
+}) => {
+  await page.goto("/chat/Qwen3-8B");
+  const prompt = page.getByLabel("Message", { exact: true });
+  await prompt.fill("Write a Python function.");
+  await prompt.press("Enter");
+  const code = page.locator('[data-role="assistant"] pre code');
+  await expect(code).toContainText("def greet(name):");
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(page.locator("#feedback")).toHaveText("Generation stopped.");
+  await expect(code.locator(".hljs-keyword").first()).toHaveText("def");
+  const stopped = await code.textContent();
+  await page.reload();
+  expect(await code.textContent()).toEqual(stopped);
+});
+
+test("reinstall between snapshots cannot inherit the previous installation's chat", async ({
+  page,
+}) => {
+  let replacement = false;
+  await page.route("**/admin/state", async (route) => {
+    const result = await route.fetch(),
+      state = await result.json();
+    if (replacement) {
+      const model = state.models.find(
+        (m: { alias: string }) => m.alias === "Qwen3-8B",
+      );
+      model.installation = "another-installation";
+      model.repo = "another/Qwen3-8B";
+    }
+    await route.fulfill({ json: state });
+  });
+  await page.goto("/chat/Qwen3-8B");
+  const prompt = page.getByLabel("Message", { exact: true });
+  await prompt.fill("Hello");
+  await prompt.press("Enter");
+  await expect(page.locator('[data-role="assistant"]')).toContainText("today?");
+  await prompt.fill("private draft");
+  replacement = true;
+  await page.reload();
+  await expect(prompt).toHaveValue("");
+  await expect(page.locator('[data-role="user"]')).toHaveCount(0);
+});
+
 test("a single preset is preselected but installation requires explicit Download", async ({
   page,
 }) => {
@@ -331,6 +376,14 @@ test("removal is confirmed, not triggered by navigation", async ({ page }) => {
     "/chat/Llama-3-2-3B-Instruct",
   );
   await page.reload();
+  const alias = "Llama-3-2-3B-Instruct";
+  await page.evaluate((a) => {
+    sessionStorage.setItem(
+      `lum.chat.${a}`,
+      JSON.stringify([{ role: "user", content: "old conversation" }]),
+    );
+    sessionStorage.setItem(`lum.draft.${a}`, "old draft");
+  }, alias);
   await page.getByRole("button", { name: "Options for My model" }).click();
   await page.getByRole("button", { name: "Remove", exact: true }).click();
   await page.getByRole("button", { name: "Remove files" }).click();
@@ -341,6 +394,54 @@ test("removal is confirmed, not triggered by navigation", async ({ page }) => {
     page.getByRole("link", { name: "Qwen3-8B Loaded" }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "My model" })).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      (a) => [
+        sessionStorage.getItem(`lum.chat.${a}`),
+        sessionStorage.getItem(`lum.draft.${a}`),
+      ],
+      alias,
+    ),
+  ).toEqual([null, null]);
+});
+
+test("a failed download notifies once and keeps its diagnostic", async ({
+  page,
+}) => {
+  let failed = false;
+  await page.route("**/admin/state", async (route) => {
+    const result = await route.fetch();
+    const state = await result.json();
+    state.models.push({
+      alias: "broken",
+      installation: "test-failure",
+      repo: "test/broken",
+      state: failed ? "failed" : "downloading",
+      error: failed ? "Not enough space" : "",
+    });
+    await route.fulfill({ json: state });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "Downloads: 1 queued or active" })
+    .click();
+  failed = true;
+  const dialog = page.getByRole("dialog", { name: "Download failed: broken" });
+  await expect(dialog.getByRole("alert")).toHaveText("Not enough space");
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await page
+    .getByRole("button", { name: "Downloads: 0 queued or active" })
+    .click();
+  await page.waitForResponse((r) => r.url().endsWith("/admin/state"));
+  await expect(dialog).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "+ Add model" }).click();
+  await page.getByText("Install failed: broken").click();
+  await expect(
+    page
+      .getByRole("dialog", { name: "Add model" })
+      .getByText("Not enough space"),
+  ).toBeVisible();
 });
 
 test("setup retries and continues to the requested screen", async ({

@@ -110,10 +110,22 @@ async fn chat(State(engine): State<Native>, body: Result<Json<Value>, JsonReject
     if body.get("stream").is_some_and(|v| !v.is_boolean()) {
         return invalid("stream must be a boolean");
     }
+    if let Some(opts) = body.get("stream_options")
+        && !(body["stream"] == true
+            && opts.as_object().is_some_and(|o| {
+                o.iter()
+                    .all(|(k, v)| k == "include_usage" && v.is_boolean())
+            }))
+    {
+        return invalid(
+            "stream_options requires streaming and accepts only a boolean include_usage",
+        );
+    }
     let allowed = [
         "model",
         "messages",
         "stream",
+        "stream_options",
         "max_tokens",
         "temperature",
         "top_p",

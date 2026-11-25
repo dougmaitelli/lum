@@ -125,10 +125,12 @@ async fn chat(
             .split_inclusive(' ')
             .map(|word| format!("data: {}\n\n", chunk(json!({"content":word}), Value::Null)))
             .collect();
-        frames.push(format!(
-            "data: {}\n\ndata: [DONE]\n\n",
-            chunk(json!({}), json!("stop"))
-        ));
+        frames.push(format!("data: {}\n\n", chunk(json!({}), json!("stop"))));
+        if v["stream_options"]["include_usage"] == true {
+            let usage = json!({"id":id,"model":a,"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":text.split_whitespace().count()}});
+            frames.push(format!("data: {usage}\n\n"));
+        }
+        frames.push("data: [DONE]\n\n".into());
         let stream = futures_util::stream::unfold(frames.into_iter(), |mut frames| async move {
             let frame = frames.next()?;
             tokio::time::sleep(Duration::from_millis(80)).await;

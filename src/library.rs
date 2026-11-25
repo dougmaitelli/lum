@@ -9,6 +9,7 @@ pub struct Library(pub PathBuf);
 #[derive(Debug, serde::Serialize)]
 pub struct Model {
     pub alias: String,
+    pub installation: String,
     pub label: String,
     pub context_limit: Option<i32>,
     pub repo: String,
@@ -50,6 +51,20 @@ impl Library {
         db.execute_batch("CREATE TABLE IF NOT EXISTS model_settings(alias TEXT PRIMARY KEY REFERENCES models(alias) ON DELETE CASCADE, label TEXT NOT NULL, context_limit INTEGER CHECK(context_limit > 0));")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS model_pins(alias TEXT NOT NULL PRIMARY KEY REFERENCES models(alias) ON DELETE CASCADE);")?;
         db.execute_batch(crate::keys::SCHEMA)?;
+        if !db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('models') WHERE name='installation')",
+            [],
+            |r| r.get::<_, bool>(0),
+        )? {
+            db.execute_batch("BEGIN; ALTER TABLE models ADD COLUMN installation TEXT NOT NULL DEFAULT ''; UPDATE models SET installation=hex(randomblob(16)); COMMIT;")?;
+        }
+        for m in lib.list()?.into_iter().filter(|m| m.state == "deleting") {
+            if let Err(e) = lib.complete_delete(&m.alias) {
+                // Leave the tombstone for another retry, not a phantom install.
+                eprintln!("Could not finish deletion of {}: {e:#}", m.alias);
+                lib.finish(&m.alias, "deleting", &format!("Deletion incomplete: {e:#}"))?;
+            }
+        }
         Ok(lib)
     }
     /// Run synchronous SQLite work off the HTTP/event-loop thread.
@@ -82,11 +97,12 @@ impl Library {
     pub fn list(&self) -> Result<Vec<Model>> {
         let db = self.db()?;
         let mut q = db.prepare(
-            "SELECT alias,repo,preset,revision,state,desired,error,COALESCE(label,''),context_limit,EXISTS(SELECT 1 FROM model_pins p WHERE p.alias=models.alias) FROM models LEFT JOIN model_settings USING(alias) ORDER BY alias",
+            "SELECT alias,repo,preset,revision,state,desired,error,COALESCE(label,''),context_limit,EXISTS(SELECT 1 FROM model_pins p WHERE p.alias=models.alias),installation FROM models LEFT JOIN model_settings USING(alias) ORDER BY alias",
         )?;
         Ok(q.query_map([], |r| {
             Ok(Model {
                 alias: r.get(0)?,
+                installation: r.get(10)?,
                 repo: r.get(1)?,
                 preset: r.get(2)?,
                 revision: r.get(3)?,
@@ -112,7 +128,7 @@ impl Library {
         );
         ensure!(
             db.execute(
-                "INSERT OR IGNORE INTO models(alias,repo,preset,state) VALUES(?,?,?,'queued')",
+                "INSERT OR IGNORE INTO models(alias,repo,preset,state,installation) VALUES(?,?,?,'queued',hex(randomblob(16)))",
                 params![a, repo, preset]
             )? == 1,
             "Alias already belongs to another installation."
@@ -192,6 +208,35 @@ impl Library {
         )?;
         Ok(())
     }
+    pub fn load_intent(&self, a: &str, victim: Option<&str>) -> Result<()> {
+        let mut db = self.db()?;
+        let tx = db.transaction()?;
+        if let Some(v) = victim {
+            tx.execute("UPDATE models SET desired=0,error='' WHERE alias=?", [v])?;
+        }
+        tx.execute("UPDATE models SET desired=1,error='' WHERE alias=?", [a])?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn delete(&self, a: &str) -> Result<()> {
+        self.finish(a, "deleting", "")?;
+        if let Err(e) = self.complete_delete(a) {
+            self.finish(a, "deleting", &format!("Deletion incomplete: {e:#}"))?;
+            return Err(e);
+        }
+        Ok(())
+    }
+    fn complete_delete(&self, a: &str) -> Result<()> {
+        ensure!(slug(a), "Invalid alias");
+        for path in [self.staging(a), self.package(a)] {
+            match std::fs::remove_dir_all(path) {
+                Ok(()) => (),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(e) => return Err(e.into()),
+            }
+        }
+        self.forget(a)
+    }
     pub fn forget(&self, a: &str) -> Result<()> {
         self.db()?
             .execute("DELETE FROM models WHERE alias=?", [a])?;
@@ -215,6 +260,39 @@ mod tests {
             writer.execute_batch("ROLLBACK").unwrap();
         });
         assert!(read?.is_empty());
+        Ok(())
+    }
+    #[test]
+    fn replacement_intent_is_atomic_and_survives_interruption() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let lib = Library::open(dir.path())?;
+        for a in ["old", "new"] {
+            lib.reserve(a, "org/model", "")?;
+            lib.finish(a, "installed", "")?;
+        }
+        lib.desired("old", true)?;
+        lib.db()?.execute_batch("CREATE TRIGGER interrupt BEFORE UPDATE ON models WHEN new.alias='new' BEGIN SELECT RAISE(ABORT,'interrupted'); END;")?;
+        assert!(lib.load_intent("new", Some("old")).is_err());
+        assert_eq!(lib.restore_order(1)?[0].alias, "old");
+        lib.db()?.execute_batch("DROP TRIGGER interrupt")?;
+        lib.load_intent("new", Some("old"))?;
+        let recovered = Library::open(dir.path())?.restore_order(1)?;
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].alias, "new");
+        Ok(())
+    }
+    #[test]
+    fn deletion_recovers_after_files_removed_before_database_commit() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let lib = Library::open(dir.path())?;
+        lib.reserve("model", "org/model", "")?;
+        std::fs::create_dir(lib.package("model"))?;
+        lib.db()?.execute_batch("CREATE TRIGGER interrupt BEFORE DELETE ON models BEGIN SELECT RAISE(ABORT, 'interrupted'); END;")?;
+        assert!(lib.delete("model").is_err());
+        assert!(!lib.package("model").exists());
+        assert_eq!(lib.list()?[0].state, "deleting");
+        lib.db()?.execute_batch("DROP TRIGGER interrupt")?;
+        assert!(Library::open(dir.path())?.list()?.is_empty());
         Ok(())
     }
     #[test]

@@ -142,9 +142,34 @@ async fn check_inference(client: &Client, admin: &str, alias: &str) -> Result<()
             .any(|m| m["id"] == alias)
     );
     for streaming in [false, true] {
-        let r=client.post(&chat).bearer_auth(&token).json(&serde_json::json!({"model":alias,"messages":[{"role":"user","content":"a"}],"max_tokens":4,"stream":streaming})).send().await?.error_for_status()?;
+        let mut body = serde_json::json!({"model":alias,"messages":[{"role":"user","content":"a"}],"max_tokens":4,"stream":streaming});
         if streaming {
-            assert!(r.text().await?.contains("[DONE]"));
+            body["stream_options"] = serde_json::json!({"include_usage":"yes"});
+            assert_eq!(
+                client
+                    .post(&chat)
+                    .bearer_auth(&token)
+                    .json(&body)
+                    .send()
+                    .await?
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+            body["stream_options"]["include_usage"] = true.into();
+        }
+        let r = client
+            .post(&chat)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+        if streaming {
+            let frames = r.text().await?;
+            assert!(
+                frames.contains("[DONE]") && frames.contains("completion_tokens"),
+                "missing streamed usage"
+            );
         } else {
             let v: serde_json::Value = r.json().await?;
             assert!(v["choices"][0]["message"]["content"].is_string());

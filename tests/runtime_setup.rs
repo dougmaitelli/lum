@@ -18,6 +18,17 @@ impl Drop for Process {
 }
 #[tokio::test]
 async fn foreground_setup_failure_is_recoverable_without_systemd() -> Result<()> {
+    exercise_retry(None).await
+}
+#[tokio::test]
+#[ignore = "requires the pinned CPU Loom SDK on PATH"]
+async fn startup_retry_recovers_on_the_same_listener() -> Result<()> {
+    let bin = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .find(|p| p.join("loom-serve").is_file())
+        .context("missing SDK")?;
+    exercise_retry(Some(&bin)).await
+}
+async fn exercise_retry(real: Option<&std::path::Path>) -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let log = tmp.path().join("log");
     let bin = tmp.path().join("external");
@@ -32,6 +43,7 @@ async fn foreground_setup_failure_is_recoverable_without_systemd() -> Result<()>
             .env("LUM_ADMIN_PORT", "0")
             .env("LUM_INFERENCE_PORT", "0")
             .env("LUM_RUNTIME_BIN", &bin)
+            .env("LUM_DEVICE", "task")
             .stderr(Stdio::from(fs::File::create(&log)?))
             .spawn()?,
     );
@@ -99,9 +111,43 @@ async fn foreground_setup_failure_is_recoverable_without_systemd() -> Result<()>
         StatusCode::FORBIDDEN
     );
     // Successful checks on retry advance to launching the engine. /bin/true then
-    // exits immediately, so the supervisor reports child exit, not setup failure.
+    // exits immediately. The same admin listener must still serve retries.
     for tool in ["loom-fetch", "loom-serve"] {
         symlink("/bin/true", bin.join(tool))?;
+    }
+    assert_eq!(
+        http.post(&retry)
+            .header("Origin", &origin)
+            .send()
+            .await?
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let state: serde_json::Value = http
+                .get(format!("{origin}/admin/runtime"))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            if state["setup"]["error"]
+                .as_str()
+                .is_some_and(|s| s.contains("loom-serve exited"))
+            {
+                break;
+            }
+            sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .context("retry did not reach engine launch")?;
+    assert!(fs::read_to_string(log)?.contains("loom-serve exited"));
+    if let Some(real) = real {
+        fs::remove_file(bin.join("loom-serve"))?;
+        symlink(real.join("loom-serve"), bin.join("loom-serve"))?;
     }
     assert_eq!(
         http.post(retry)
@@ -111,14 +157,28 @@ async fn foreground_setup_failure_is_recoverable_without_systemd() -> Result<()>
             .status(),
         StatusCode::ACCEPTED
     );
-    timeout(Duration::from_secs(5), async {
-        while child.0.try_wait().unwrap().is_none() {
-            sleep(Duration::from_millis(30)).await;
-        }
-    })
-    .await
-    .context("retry did not reach engine launch")?;
-    assert!(fs::read_to_string(log)?.contains("loom-serve exited"));
+    if real.is_some() {
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let state: serde_json::Value = http
+                    .get(format!("{origin}/admin/runtime"))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                if state["setup"]["phase"] == "ready" {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                sleep(Duration::from_millis(40)).await;
+            }
+        })
+        .await??;
+    }
+    rustix::process::kill_process(
+        rustix::process::Pid::from_raw(child.0.id() as i32).unwrap(),
+        rustix::process::Signal::TERM,
+    )?;
+    assert!(child.0.wait()?.success());
     assert!(tmp.path().join("data/lum/library.sqlite").is_file());
     Ok(())
 }

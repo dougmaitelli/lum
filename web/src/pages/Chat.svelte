@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { snapshot, modelAction, type Snapshot } from "../api/admin";
+  import { forgetChat, reconcileChats } from "../api/chat-storage";
   import Conversation from "../components/Conversation.svelte";
   import StatusBar from "../components/StatusBar.svelte";
   import ModelSettings from "../components/ModelSettings.svelte";
@@ -28,6 +29,7 @@
         .sort((a, b) => a.state.localeCompare(b.state)),
     );
   let errors: ErrorDialog, removal: RemoveModel;
+  let failedJobs: Set<string> | undefined;
   let newest = 0,
     lastModelError = "";
   async function refresh() {
@@ -35,6 +37,13 @@
     try {
       const result = await snapshot();
       if (id !== newest) return;
+      reconcileChats(result.models);
+      const failures = result.models.filter((m) => m.state === "failed");
+      for (const job of failures) {
+        if (failedJobs && !failedJobs.has(job.installation))
+          errors.show(`Download failed: ${job.alias}`, job.error);
+      }
+      failedJobs = new Set(failures.map((m) => m.installation));
       data = result;
       stale = false;
       if (!models.some((m) => m.alias === selected))
@@ -236,7 +245,7 @@
       </div>
     </header>
 
-    {#key current?.alias}
+    {#key current?.installation}
       <Conversation
         bind:this={conversation}
         model={current}
@@ -252,6 +261,7 @@
   <RemoveModel
     bind:this={removal}
     onremoved={async (alias) => {
+      forgetChat(alias);
       if (location.pathname === `/chat/${alias}`) history.replaceState(null, "", "/");
       await refresh();
     }}
@@ -261,7 +271,9 @@
   <AddModel
     bind:this={add}
     onremove={(model) => removal.open(model)}
-    failures={data.models.filter((m) => m.state === "failed")}
+    failures={data.models.filter(
+      (m) => m.state === "failed" || (m.state === "deleting" && m.error),
+    )}
     ondownload={() => {
       downloads.open();
       void refresh();

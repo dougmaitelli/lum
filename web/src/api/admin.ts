@@ -1,5 +1,6 @@
 export interface Model {
   alias: string;
+  installation: string;
   label: string;
   context_limit: number | null;
   repo: string;

@@ -112,78 +112,90 @@ pub async fn run(foreground: bool) -> Result<()> {
     let manager = async {
         loop {
             phase.send_replace(Setup::Preparing);
-            match sdk.ensure().await {
-                Ok(()) => break,
-                Err(e) => {
-                    eprintln!("Runtime setup failed: {e:#}");
-                    phase.send_replace(Setup::Failed(format!("{e:#}")));
-                    retry.notified().await;
+            let attempt = async {
+                sdk.ensure().await?;
+                child = Some(start(&sdk, &socket)?);
+                let ready = async {
+                    restore(&engine, &lib, max_loaded).await?;
+                    phase.send_replace(Setup::Ready);
+                    eprintln!("Lum library: {url}");
+                    std::future::pending::<Result<()>>().await
+                };
+                tokio::select! {
+                    status = child.as_mut().unwrap().wait() => bail!("loom-serve exited: {} (see service logs for device diagnostics)", status?),
+                    result = ready => result,
                 }
+            }.await;
+            if matches!(*phase.borrow(), Setup::Ready) {
+                return attempt;
             }
+            if let Some(mut failed) = child.take() {
+                stop(&mut failed).await?;
+            }
+            let Err(e) = attempt else { return Ok(()) };
+            eprintln!("Runtime setup failed: {e:#}");
+            phase.send_replace(Setup::Failed(format!("{e:#}")));
+            retry.notified().await;
         }
-        child = Some(
-            Command::new(sdk.bin().join("loom-serve"))
-                .args([
-                    format!(
-                        "--device={}",
-                        env::var("LUM_DEVICE").unwrap_or_else(|_| "amdgpu".into())
-                    ),
-                    format!(
-                        "--pool_backing={}",
-                        env::var("LUM_POOL_BACKING").unwrap_or_else(|_| "fixed".into())
-                    ),
-                    format!("--listen=unix:{}", socket.display()),
-                ])
-                .stdin(Stdio::null())
-                .kill_on_drop(true)
-                .spawn()
-                .context("launch loom-serve")?,
-        );
-        let wait = child.as_mut().unwrap().wait();
-        let ready = async {
-            timeout(Duration::from_secs(20), async {
-                while engine.ready().await.is_err() {
-                    sleep(Duration::from_millis(80)).await;
-                }
-            })
-            .await
-            .context("Engine did not become ready")?;
-            let mut restored = 0;
-            for m in lib.run(move |lib| lib.restore_order(max_loaded)).await? {
-                if restored >= max_loaded {
-                    lib.for_alias(&m.alias, |lib, a| lib.desired(a, false))
-                        .await?;
-                    eprintln!(
-                        "Not restoring {}: models.max_loaded = {max_loaded}",
-                        m.alias
-                    );
-                    continue;
-                }
-                if let Err(e) = engine
-                    .register(&m.alias, &lib.package(&m.alias), &m.preset, m.context_limit)
-                    .await
-                {
-                    lib.for_alias(&m.alias, move |lib, a| {
-                        lib.finish(a, "installed", &format!("Restore failed: {e:#}"))
-                    })
-                    .await?;
-                } else {
-                    lib.for_alias(&m.alias, |lib, a| lib.desired(a, true))
-                        .await?;
-                    restored += 1;
-                }
-            }
-            phase.send_replace(Setup::Ready);
-            eprintln!("Lum library: {url}");
-            std::future::pending::<Result<()>>().await
-        };
-        tokio::select! {s=wait=>bail!("loom-serve exited: {}",s?),r=ready=>r}
     };
     let result = tokio::select! {r=manager=>r,r=axum::serve(listener,router)=>r.context("admin listener"),r=axum::serve(api,inference)=>r.context("inference listener"),_=term.recv()=>Ok(()),_=interrupt.recv()=>Ok(())};
     if let Some(mut child) = child {
         stop(&mut child).await?;
     }
     result
+}
+fn start(sdk: &Runtime, socket: &Path) -> Result<Child> {
+    Command::new(sdk.bin().join("loom-serve"))
+        .args([
+            format!(
+                "--device={}",
+                env::var("LUM_DEVICE").unwrap_or_else(|_| "amdgpu".into())
+            ),
+            format!(
+                "--pool_backing={}",
+                env::var("LUM_POOL_BACKING").unwrap_or_else(|_| "fixed".into())
+            ),
+            format!("--listen=unix:{}", socket.display()),
+        ])
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .context("launch loom-serve")
+}
+async fn restore(engine: &Native, lib: &Library, max_loaded: usize) -> Result<()> {
+    timeout(Duration::from_secs(20), async {
+        while engine.ready().await.is_err() {
+            sleep(Duration::from_millis(80)).await;
+        }
+    })
+    .await
+    .context("Engine did not become ready")?;
+    let mut restored = 0;
+    for m in lib.run(move |lib| lib.restore_order(max_loaded)).await? {
+        if restored >= max_loaded {
+            lib.for_alias(&m.alias, |lib, a| lib.desired(a, false))
+                .await?;
+            eprintln!(
+                "Not restoring {}: models.max_loaded = {max_loaded}",
+                m.alias
+            );
+            continue;
+        }
+        if let Err(e) = engine
+            .register(&m.alias, &lib.package(&m.alias), &m.preset, m.context_limit)
+            .await
+        {
+            lib.for_alias(&m.alias, move |lib, a| {
+                lib.finish(a, "installed", &format!("Restore failed: {e:#}"))
+            })
+            .await?;
+        } else {
+            lib.for_alias(&m.alias, |lib, a| lib.desired(a, true))
+                .await?;
+            restored += 1;
+        }
+    }
+    Ok(())
 }
 async fn stop(child: &mut Child) -> Result<()> {
     if let Some(pid) = child.id().and_then(|n| Pid::from_raw(n as i32)) {

@@ -17,11 +17,11 @@ Lum is a web manager for local hrx-loom chat models. One Rust service lets you d
 
 For an unloaded model, **… → Settings** lets you change its display label and context limit without changing its API model ID.
 
-Chat keeps a separate conversation per model in the browser tab and shows elapsed time, completion tokens and end-to-end output tokens/s when Loom reports usage. Replies stream as they are generated. **Stop** interrupts the request and keeps any visible partial answer. Lum sends no browser reply budget; Loom’s model and context limits still apply. `/metrics` exposes native Prometheus text directly.
+Chat keeps a separate conversation per model in the browser tab and shows elapsed time, completion tokens and end-to-end output tokens/s when Loom reports usage. Removing a model clears its conversation and draft; reinstalling under the same name starts fresh. Replies stream as they are generated. **Stop** interrupts the request and keeps any visible partial answer. Lum sends no browser reply budget; Loom’s model and context limits still apply. `/metrics` exposes native Prometheus text directly.
 
 ## Connect an OpenAI-compatible client
 
-Load a model, then open **API keys** in the sidebar. Copy the client base URL (normally `http://127.0.0.1:9391/v1`), create a named key, and copy the secret before leaving the page. Set the client’s model to the loaded alias. The separate inference listener supports `GET /v1/models` and `POST /v1/chat/completions` for text messages, including `stream: true`. Both require `Authorization: Bearer <key>`. Revoke a key on the same page to reject subsequent requests; no restart is needed.
+Load a model, then open **API keys** in the sidebar. Copy the client base URL (normally `http://127.0.0.1:9391/v1`), create a named key, and copy the secret before leaving the page. Set the client’s model to the loaded alias. The separate inference listener supports `GET /v1/models` and `POST /v1/chat/completions` for text messages, including `stream: true` with optional `stream_options: {"include_usage": true}`. Both require `Authorization: Bearer <key>`. Revoke a key on the same page to reject subsequent requests; no restart is needed.
 
 To serve another machine, configure [the inference listener](packaging/INSTALL.md#configure-the-listener), not the password-free admin listener. Keys protect inference only. Keep the admin UI restricted: anyone who can reach it can create and revoke keys.
 

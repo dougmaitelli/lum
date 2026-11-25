@@ -268,7 +268,10 @@ async fn model_action(
     Path((a, op)): Path<(String, String)>,
     Extension(max_loaded): Extension<usize>,
 ) -> Ui<StatusCode> {
-    apply(&app, &a, &op, max_loaded).await?;
+    // Finish accepted mutations even if the requesting tab disconnects.
+    tokio::spawn(async move { apply(&app, &a, &op, max_loaded).await })
+        .await
+        .map_err(anyhow::Error::from)??;
     Ok(StatusCode::NO_CONTENT)
 }
 fn api_base(addr: std::net::SocketAddr, headers: &axum::http::HeaderMap) -> Result<String> {
@@ -518,44 +521,60 @@ async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
                     .filter(|m| registrations.contains_key(&m.alias))
                     .map(|m| (m.alias.as_str(), m.pinned)),
             )?;
-            if let Some(v) = victim {
-                if registrations[v].registration != "retiring" {
-                    app.engine.stop(v).await?;
-                }
-                app.lib.for_alias(v, |lib, a| lib.desired(a, false)).await?;
-                tokio::time::timeout(Duration::from_secs(30), async {
-                    while app.engine.status().await?.contains_key(v) {
-                        tokio::time::sleep(Duration::from_millis(150)).await;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                })
-                .await
-                .with_context(|| {
-                    format!("{v} is still unloading; retry once its requests finish")
-                })??;
-            }
-            app.engine
-                .register(a, &app.lib.package(a), &m.preset, m.context_limit)
+            let previous = victim.map(str::to_owned);
+            app.lib
+                .for_alias(a, move |lib, a| lib.load_intent(a, previous.as_deref()))
                 .await?;
-            app.lib.for_alias(a, |lib, a| lib.desired(a, true)).await?;
+            let start = async {
+                if let Some(v) = victim {
+                    if registrations[v].registration != "retiring" {
+                        app.engine.stop(v).await?;
+                    }
+                    tokio::time::timeout(Duration::from_secs(30), async {
+                        while app.engine.status().await?.contains_key(v) {
+                            tokio::time::sleep(Duration::from_millis(150)).await;
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })
+                    .await
+                    .with_context(|| {
+                        format!("{v} is still unloading; retry once its requests finish")
+                    })??;
+                }
+                app.engine
+                    .register(a, &app.lib.package(a), &m.preset, m.context_limit)
+                    .await
+            }
+            .await;
+            if let Err(err) = start {
+                // A timeout doesn't prove Loom rejected the change. Reconcile
+                // observed registrations; if offline leave persisted startup intent intact.
+                if let Ok(live) = app.engine.status().await {
+                    let on = live.contains_key(a);
+                    app.lib
+                        .for_alias(a, move |lib, a| lib.desired(a, on))
+                        .await?;
+                    if let Some(v) = victim
+                        .filter(|v| live.get(*v).is_some_and(|r| r.registration != "retiring"))
+                    {
+                        app.lib.for_alias(v, |lib, a| lib.desired(a, true)).await?;
+                    }
+                }
+                return Err(err);
+            }
         }
         "stop" => {
-            if registered {
+            app.lib.for_alias(a, |lib, a| lib.desired(a, false)).await?;
+            if registered && registrations[a].registration != "retiring" {
                 app.engine.stop(a).await?;
             }
-            app.lib.for_alias(a, |lib, a| lib.desired(a, false)).await?;
         }
         "delete" => {
             ensure!(
                 !registered && !m.desired && !matches!(m.state.as_str(), "downloading" | "queued"),
                 "Stop the model and wait for retirement or download completion first"
             );
-            for path in [app.lib.staging(a), app.lib.package(a)] {
-                if path.exists() {
-                    tokio::fs::remove_dir_all(path).await?;
-                }
-            }
-            app.lib.for_alias(a, Library::forget).await?;
+            app.lib.for_alias(a, Library::delete).await?;
         }
         _ => bail!("Unknown action"),
     }

@@ -1,8 +1,21 @@
 <script lang="ts">
   import { segments } from "./message-format";
   import HighlightedCode from "./HighlightedCode.svelte";
-  let { content }: { content: string } = $props();
-  let parts = $derived(segments(content));
+  import { untrack } from "svelte";
+  let { content, streaming = false }: { content: string; streaming?: boolean } = $props();
+  let checkpoint = $state("");
+  $effect(() => {
+    if (!streaming) return;
+    checkpoint = untrack(() => content);
+    const timer = setInterval(() => {
+      checkpoint = content;
+    }, 150);
+    return () => clearInterval(timer);
+  });
+  let prefix = $derived(streaming ? checkpoint : content);
+  let parts = $derived(segments(prefix));
+  let last = $derived(parts.at(-1));
+  let tail = $derived(streaming ? content.slice(prefix.length) : "");
 </script>
 
 <div class="message-body">
@@ -10,12 +23,17 @@
     {#if part.kind === "code"}
       <div class="code-block">
         {#if part.language}<small>{part.language}</small>{/if}
-        <HighlightedCode text={part.value} language={part.language} />
+        <HighlightedCode
+          text={part.value}
+          language={part.language}
+          tail={part.open && index === parts.length - 1 ? tail : ""}
+        />
       </div>
     {:else}
-      <p>{part.value}</p>
+      <p>{part.value}{index === parts.length - 1 ? tail : ""}</p>
     {/if}
   {/each}
+  {#if tail && last?.kind === "code" && !last.open}<p>{tail}</p>{/if}
 </div>
 
 <style>

@@ -101,9 +101,13 @@
 
   {#each failures as m (m.alias)}
     <details>
-      <summary>Install failed: {m.alias}</summary>
+      <summary>
+        {m.state === "deleting" ? "Removal incomplete" : "Install failed"}: {m.alias}
+      </summary>
       <pre class="warning">{m.error}</pre>
-      <button type="button" onclick={() => onremove(m)}>Remove failed install to retry…</button>
+      <button type="button" onclick={() => onremove(m)}>
+        {m.state === "deleting" ? "Retry removal…" : "Remove failed install to retry…"}
+      </button>
     </details>
   {/each}
   <div>
