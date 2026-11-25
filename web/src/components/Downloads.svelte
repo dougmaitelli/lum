@@ -11,6 +11,12 @@
   }
   let { jobs, progress }: { jobs: Model[]; progress: Snapshot["progress"] } = $props();
   let popover: HTMLElement;
+  let hadJobs = false;
+  $effect(() => {
+    const hasJobs = jobs.length > 0;
+    if (hadJobs && !hasJobs && isOpen()) popover.hidePopover();
+    hadJobs = hasJobs;
+  });
   export function open() {
     popover.showPopover();
   }
@@ -24,29 +30,25 @@
   {#if error}<p class="warning" role="alert">{error}</p>{/if}
 
   {#each jobs as m (m.alias)}
+    {@const queued = m.state === "queued"}
     <div class="job">
-      <strong>{m.alias}</strong>
-      <span class="state">
-        {m.state === "queued" ? "Queued" : progress.stage || "Preparing"}
-      </span>
-      <small>{m.repo}</small>
-      <button aria-label={`Cancel download of ${m.alias}`} onclick={() => cancel(m.alias)}>
-        Cancel
-      </button>
-
-      {#if m.state === "downloading"}
+      <div class="job-detail">
+        <strong title={m.repo}>{m.alias}</strong>
         <progress
           aria-label={"Current file progress for " + m.alias}
           max="100"
-          value={progress.percent ?? undefined}
+          value={queued ? 0 : (progress.percent ?? undefined)}
         ></progress>
-
-        {#if progress.percent !== null}
-          <small>
-            Current file: {progress.percent}%
-          </small>
-        {/if}
-      {/if}
+        <small class="state">
+          {queued
+            ? "Queued"
+            : progress.stage || "Preparing"}{#if !queued && progress.percent !== null}
+            · {progress.percent}%{/if}
+        </small>
+      </div>
+      <button aria-label={`Cancel download of ${m.alias}`} onclick={() => cancel(m.alias)}>
+        Cancel
+      </button>
     </div>
   {:else}
     <p class="muted">No active downloads.</p>

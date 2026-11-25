@@ -16,6 +16,7 @@ pub struct Model {
     pub revision: String,
     pub state: String,
     pub desired: bool,
+    pub pinned: bool,
     pub error: String,
 }
 
@@ -47,6 +48,7 @@ impl Library {
         let db = lib.db()?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS models(alias TEXT PRIMARY KEY, repo TEXT NOT NULL, preset TEXT NOT NULL, revision TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, desired INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT ''); UPDATE models SET state='failed',error='Download interrupted. Remove and download again.' WHERE state IN ('queued','downloading');")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS model_settings(alias TEXT PRIMARY KEY REFERENCES models(alias) ON DELETE CASCADE, label TEXT NOT NULL, context_limit INTEGER CHECK(context_limit > 0));")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS model_pins(alias TEXT NOT NULL PRIMARY KEY REFERENCES models(alias) ON DELETE CASCADE);")?;
         db.execute_batch(crate::keys::SCHEMA)?;
         Ok(lib)
     }
@@ -80,7 +82,7 @@ impl Library {
     pub fn list(&self) -> Result<Vec<Model>> {
         let db = self.db()?;
         let mut q = db.prepare(
-            "SELECT alias,repo,preset,revision,state,desired,error,COALESCE(label,''),context_limit FROM models LEFT JOIN model_settings USING(alias) ORDER BY alias",
+            "SELECT alias,repo,preset,revision,state,desired,error,COALESCE(label,''),context_limit,EXISTS(SELECT 1 FROM model_pins p WHERE p.alias=models.alias) FROM models LEFT JOIN model_settings USING(alias) ORDER BY alias",
         )?;
         Ok(q.query_map([], |r| {
             Ok(Model {
@@ -93,6 +95,7 @@ impl Library {
                 error: r.get(6)?,
                 label: r.get(7)?,
                 context_limit: r.get(8)?,
+                pinned: r.get(9)?,
             })
         })?
         .collect::<rusqlite::Result<_>>()?)
@@ -142,6 +145,45 @@ impl Library {
             params![state, error, a],
         )?;
         Ok(())
+    }
+    pub fn pin(&self, alias: &str, on: bool, max: usize) -> Result<()> {
+        let mut db = self.db()?;
+        let tx = db.transaction()?;
+        if on {
+            ensure!(
+                tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM models WHERE alias=? AND state='installed')",
+                    [alias],
+                    |r| r.get::<_, bool>(0)
+                )?,
+                "Install the model before pinning it"
+            );
+            tx.execute("INSERT OR IGNORE INTO model_pins VALUES(?)", [alias])?;
+            ensure!(
+                tx.query_row(
+                    "SELECT COUNT(*) <= ? FROM model_pins",
+                    [i64::try_from(max).unwrap_or(i64::MAX)],
+                    |r| r.get::<_, bool>(0)
+                )?,
+                "Pin limit reached (models.max_loaded = {max}). Unpin another model first."
+            );
+        } else {
+            tx.execute("DELETE FROM model_pins WHERE alias=?", [alias])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn restore_order(&self, max: usize) -> Result<Vec<Model>> {
+        // The file-based config can be lowered while Lum is stopped. Keep the
+        // earliest pins, deterministically, rather than exceeding the new cap.
+        let removed = self.db()?.execute("DELETE FROM model_pins WHERE alias IN (SELECT alias FROM model_pins ORDER BY rowid LIMIT -1 OFFSET ?)",[i64::try_from(max).unwrap_or(i64::MAX)])?;
+        if removed > 0 {
+            eprintln!("Released {removed} most recent pin(s) to respect models.max_loaded = {max}");
+        }
+        let mut models = self.list()?;
+        models.retain(|m| m.state == "installed" && (m.pinned || m.desired));
+        models.sort_by_key(|m| !m.pinned);
+        Ok(models)
     }
     pub fn desired(&self, a: &str, on: bool) -> Result<()> {
         self.db()?.execute(

@@ -2,7 +2,13 @@
   import { onDestroy, onMount, tick } from "svelte";
   import type { Turn, Model } from "../api/admin";
   import { streamReply } from "../api/chat";
-  let { model, online }: { model: Model | undefined; online: boolean } = $props();
+  let {
+    model,
+    online,
+    working,
+    onloadmodel,
+  }: { model: Model | undefined; online: boolean; working: boolean; onloadmodel: () => void } =
+    $props();
   function previous(): Turn[] {
     try {
       return JSON.parse(sessionStorage.getItem("lum.chat." + model?.alias) ?? "[]");
@@ -137,8 +143,25 @@
     </article>
   {/each}
 </section>
-{#if model}
+{#if model && !model.loaded && !busy}
+  <button
+    class="primary composer-area load-model"
+    disabled={!online || working || model.registered || model.desired}
+    onclick={onloadmodel}
+  >
+    {!online
+      ? "Engine unavailable"
+      : model.registered || model.desired
+        ? model.error
+          ? "Model unavailable"
+          : model.desired
+            ? "Loading model…"
+            : "Unloading model…"
+        : "Load model"}
+  </button>
+{:else if model}
   <form
+    class="composer-area"
     id="composer"
     onsubmit={(e) => {
       e.preventDefault();

@@ -26,7 +26,7 @@ One engine reduces scheduling and memory contention between independent runtimes
 | Package directory | Downloaded files. Fetch into staging and publish only after verification succeeds. Interrupted downloads must never appear installed. |
 | Loom | Live registration, readiness, admission, memory residency and runtime counters. A successful registration request is **not** a ready model. |
 
-Download does not imply start. Starting binds an installed package to an alias without restarting the engine. Stopping drains and unregisters only that alias. Reconcile desired registrations against observed state on startup; surface individual failures without taking healthy aliases offline. Never delete an installation still in use. Do not automatically evict another running model to start a new one.
+Download does not imply start. Starting binds an installed package to an alias without restarting the engine. Stopping drains and unregisters only that alias. Reconcile desired registrations against observed state on startup; surface individual failures without taking healthy aliases offline. Never delete an installation still in use. Restore pinned models first. Explicit loads reuse an unpinned registration before a free slot; never automatically retire a pinned registration.
 
 ## Integration and UI
 

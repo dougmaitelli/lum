@@ -9,6 +9,7 @@ export interface Model {
   loaded: boolean;
   registered: boolean;
   desired: boolean;
+  pinned: boolean;
   error: string;
 }
 export interface Snapshot {

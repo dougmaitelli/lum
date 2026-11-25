@@ -99,6 +99,26 @@
               <span class="loaded" role="img" aria-label="Loaded" title="Loaded"></span>
             {/if}
           </a>
+          <button
+            class="inline-action row-actions pin"
+            aria-label={`Pin ${m.label || m.alias}`}
+            aria-pressed={m.pinned}
+            title={m.pinned ? "Unpin model" : "Pin model at startup"}
+            disabled={working || stale}
+            onclick={() => change(m.pinned ? "unpin" : "pin", m.alias)}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              stroke-width="1.6"
+              fill={m.pinned ? "currentColor" : "none"}
+              aria-hidden="true"
+            >
+              <path d="M8 3h8l-1 7 3 3v2H6v-2l3-3zM12 15v6" />
+            </svg>
+          </button>
           {#if m.registered || m.desired}
             <button
               class="inline-action row-actions"
@@ -190,9 +210,6 @@
         {/if}
       </div>
       <div id="controls">
-        {#if current && data.online && !stale && !current.registered && !current.desired}
-          <button disabled={working} onclick={() => change("start")}>Load model</button>
-        {/if}
         {#if current}
           <button disabled={!conversation?.canClear()} onclick={() => conversation?.clear()}>
             Clear chat
@@ -207,7 +224,13 @@
     </header>
 
     {#key current?.alias}
-      <Conversation bind:this={conversation} model={current} online={data.online && !stale} />
+      <Conversation
+        bind:this={conversation}
+        model={current}
+        online={data.online && !stale}
+        {working}
+        onloadmodel={() => change("start")}
+      />
     {/key}
   </main>
   <StatusBar {data} {stale} />

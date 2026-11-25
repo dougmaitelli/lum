@@ -469,9 +469,32 @@ async fn model_settings(
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
+/// Reuse an unpinned slot before consuming a free one. Never choose an
+/// untracked registration or a pinned model as the victim.
+fn replacement<'a>(
+    registered: usize,
+    max: usize,
+    candidates: impl Iterator<Item = (&'a str, bool)>,
+) -> Result<Option<&'a str>> {
+    let victim = candidates
+        .filter_map(|(alias, pinned)| (!pinned).then_some(alias))
+        .min();
+    ensure!(
+        victim.is_some() || registered < max,
+        "No replaceable model slot (models.max_loaded = {max}). Unload a model or unpin one first."
+    );
+    Ok(victim)
+}
 async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
     let _guard = app.gate.lock().await;
     let m = app.model(a).await?;
+    if matches!(op, "pin" | "unpin") {
+        let on = op == "pin";
+        return app
+            .lib
+            .for_alias(a, move |lib, a| lib.pin(a, on, max_loaded))
+            .await;
+    }
     let registrations = app.engine.status().await?;
     let registered = registrations.contains_key(a);
     match op {
@@ -480,10 +503,31 @@ async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
                 m.state == "installed" && !registered,
                 "Package must be installed and stopped"
             );
-            ensure!(
-                registrations.len() < max_loaded,
-                "Model limit reached (models.max_loaded = {max_loaded}). Unload another model before loading this one."
-            );
+            let models = app.lib.run(Library::list).await?;
+            let victim = replacement(
+                registrations.len(),
+                max_loaded,
+                models
+                    .iter()
+                    .filter(|m| registrations.contains_key(&m.alias))
+                    .map(|m| (m.alias.as_str(), m.pinned)),
+            )?;
+            if let Some(v) = victim {
+                if registrations[v].registration != "retiring" {
+                    app.engine.stop(v).await?;
+                }
+                app.lib.for_alias(v, |lib, a| lib.desired(a, false)).await?;
+                tokio::time::timeout(Duration::from_secs(30), async {
+                    while app.engine.status().await?.contains_key(v) {
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await
+                .with_context(|| {
+                    format!("{v} is still unloading; retry once its requests finish")
+                })??;
+            }
             app.engine
                 .register(a, &app.lib.package(a), &m.preset, m.context_limit)
                 .await?;
@@ -632,6 +676,18 @@ async fn metrics(State(app): State<App>) -> Ui<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replacement_prefers_unpinned_even_with_room() {
+        assert_eq!(
+            replacement(2, 3, [("pinned", true), ("other", false)].into_iter()).unwrap(),
+            Some("other")
+        );
+        assert_eq!(
+            replacement(2, 3, [("p1", true), ("p2", true)].into_iter()).unwrap(),
+            None
+        );
+        assert!(replacement(1, 1, [("pinned", true)].into_iter()).is_err());
+    }
     #[test]
     fn chat_extracts_visible_text_or_explains_empty_answers() {
         use serde_json::json;

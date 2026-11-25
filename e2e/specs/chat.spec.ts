@@ -5,9 +5,11 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   await page.goto("/");
   await expect(page.getByRole("img", { name: "Loaded" })).toHaveCount(1);
   for (const row of await page.locator(".model-row").all()) {
-    const action = await row.locator(".row-actions").boundingBox();
-    expect(action?.height).toBe((await row.boundingBox())?.height);
-    expect(action?.width).toBe(action?.height);
+    for (const button of await row.locator(".row-actions").all()) {
+      const action = await button.boundingBox();
+      expect(action?.height).toBe((await row.boundingBox())?.height);
+      expect(action?.width).toBe(action?.height);
+    }
   }
   const prompt = page.getByLabel("Message", { exact: true });
   await prompt.fill("hello");
@@ -33,18 +35,26 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   await expect(page.getByRole("progressbar")).toBeVisible();
   const model = page.getByRole("link", { name: "browser-fixture" });
   await expect(model).toBeVisible({ timeout: 10000 });
-  await expect(page.getByText("No active downloads.")).toBeVisible();
-  await page.keyboard.press("Escape");
+  await expect(page.locator("#downloads")).toBeHidden();
   await expect(prompt).toHaveValue("unsent draft");
   await model.click();
   await expect(
     page.getByRole("button", { name: "Options for code" }),
   ).toHaveCount(0);
+  const pin = page.getByRole("button", { name: "Pin code", exact: true });
+  await pin.click();
+  await expect(pin).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Unload code", exact: true }).click();
+  await expect(pin).toHaveAttribute("aria-pressed", "true");
+  await pin.click();
   await expect(
     page.getByRole("button", { name: "Options for code" }),
   ).toBeVisible();
   await expect(page.locator(".chat-head")).toContainText("chat-16gb");
+  await expect(prompt).toHaveCount(0);
+  await expect(
+    page.locator(".chat-head").getByRole("button", { name: "Load model" }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Load model" }).click();
   await expect(
     page.getByRole("button", { name: "Unload browser-fixture", exact: true }),
@@ -69,6 +79,18 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   });
   await downloads.click();
   await expect(page.getByText("No active downloads.")).toBeVisible();
+  const panel = page.locator("#downloads");
+  expect(
+    await panel.evaluate((el) => el.getBoundingClientRect().bottom),
+  ).toBeLessThan(
+    await downloads.evaluate((el) => el.getBoundingClientRect().top),
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await panel.evaluate((el) => el.getBoundingClientRect().top),
+  ).toBeGreaterThan(
+    await downloads.evaluate((el) => el.getBoundingClientRect().bottom),
+  );
   await page.keyboard.press("Escape");
   await page.getByRole("link", { name: "API keys", exact: true }).click();
   const base = page.locator("code").filter({ hasText: /^https?:\/\/.+\/v1$/ });

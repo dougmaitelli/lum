@@ -149,12 +149,7 @@ pub async fn run(foreground: bool) -> Result<()> {
             .await
             .context("Engine did not become ready")?;
             let mut restored = 0;
-            for m in lib
-                .run(Library::list)
-                .await?
-                .into_iter()
-                .filter(|m| m.desired && m.state == "installed")
-            {
+            for m in lib.run(move |lib| lib.restore_order(max_loaded)).await? {
                 if restored >= max_loaded {
                     lib.for_alias(&m.alias, |lib, a| lib.desired(a, false))
                         .await?;
@@ -173,6 +168,8 @@ pub async fn run(foreground: bool) -> Result<()> {
                     })
                     .await?;
                 } else {
+                    lib.for_alias(&m.alias, |lib, a| lib.desired(a, true))
+                        .await?;
                     restored += 1;
                 }
             }

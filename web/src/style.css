@@ -70,6 +70,7 @@ button,
   white-space: nowrap;
 }
 .downloads-trigger {
+  anchor-name: --downloads-trigger;
   margin-inline-start: auto;
   display: inline-flex;
   align-items: center;
@@ -283,9 +284,15 @@ nav p {
 .message[data-role="user"] p {
   background: #283d39;
 }
-#composer {
+.composer-area {
   width: min(calc(100% - 32px), 800px);
   margin: 8px auto 16px;
+}
+.load-model {
+  min-height: 64px;
+  font-size: 1.1rem;
+}
+#composer {
   padding: 10px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -358,23 +365,36 @@ summary {
   cursor: pointer;
 }
 [popover] {
-  inset: auto auto 58px 12px;
+  inset: auto auto 94px 12px;
   margin: 0;
   width: min(370px, 94vw);
   max-height: 60dvh;
   overflow: auto;
 }
+#downloads {
+  position-anchor: --downloads-trigger;
+  bottom: calc(anchor(top) + 8px);
+}
 .job {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 8px;
+  gap: 12px;
+  align-items: center;
   border-top: 1px solid var(--line);
   padding: 8px 0;
   overflow-wrap: anywhere;
 }
-.job small,
-.job progress {
-  grid-column: 1/-1;
+.job-detail {
+  display: grid;
+  min-width: 0;
+}
+.job-detail strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-detail small {
+  font-variant-numeric: tabular-nums;
 }
 .job progress {
   width: 100%;
@@ -531,14 +551,15 @@ summary {
   .chat-head small {
     font-size: 11px;
   }
-  #composer {
+  .composer-area {
     margin-bottom: 6px;
   }
   .intro {
     padding: 12px;
   }
-  [popover] {
-    inset: 44px 8px auto auto;
+  #downloads {
+    inset: 54px 8px auto auto;
+    top: calc(anchor(bottom) + 8px);
   }
   .chat-head {
     align-items: flex-start;
