@@ -295,7 +295,7 @@ async fn isolated_preview_workflow() -> Result<()> {
             .header("Origin", &url)
     };
     client
-        .post(format!("{url}/admin/models/code/pin"))
+        .post(format!("{url}/admin/models/Qwen3-8B/pin"))
         .header("Origin", &url)
         .send()
         .await?
@@ -308,7 +308,7 @@ async fn isolated_preview_workflow() -> Result<()> {
     assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
     assert!(denied.text().await?.contains("models.max_loaded = 1"));
     client
-        .post(format!("{url}/admin/models/code/unpin"))
+        .post(format!("{url}/admin/models/Qwen3-8B/unpin"))
         .header("Origin", &url)
         .send()
         .await?
@@ -319,7 +319,7 @@ async fn isolated_preview_workflow() -> Result<()> {
             .as_array()
             .unwrap()
             .iter()
-            .any(|m| m["alias"] == "code" && m["registered"] == false)
+            .any(|m| m["alias"] == "Qwen3-8B" && m["registered"] == false)
     })
     .await?;
     let reply = client

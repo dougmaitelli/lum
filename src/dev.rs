@@ -129,8 +129,11 @@ pub async fn run(hot_reload: bool) -> Result<()> {
         .tempdir()?;
     let lib = Library::open(dir.path())?;
     for (a, r) in [
-        ("code", "loom-fun/dev-code-3b"),
-        ("instruct", "loom-fun/dev-instruct-1b"),
+        ("Qwen3-8B", "loom-fun/unsloth-Qwen3-8B-loom"),
+        (
+            "Llama-3-2-3B-Instruct",
+            "loom-fun/unsloth-Llama-3.2-3B-Instruct-loom",
+        ),
     ] {
         lib.reserve(a, r, "chat")?;
         stage(&lib, a).await?;
@@ -138,11 +141,12 @@ pub async fn run(hot_reload: bool) -> Result<()> {
         lib.revision(a, REV)?;
         lib.finish(a, "installed", "")?;
     }
-    lib.desired("code", true)?;
+    lib.settings("Llama-3-2-3B-Instruct", "Llama 3.2 3B Instruct", None)?;
+    lib.desired("Qwen3-8B", true)?;
     let socket = dir.path().join("mock.sock");
     let private = UnixListener::bind(&socket)?;
     let engine = Engine {
-        ready: BTreeSet::from(["code".into()]),
+        ready: BTreeSet::from(["Qwen3-8B".into()]),
         requests: 0,
     };
     let mocked = mock_engine(Arc::new(Mutex::new(engine)));

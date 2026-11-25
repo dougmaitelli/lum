@@ -17,7 +17,7 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   const prompt = page.getByLabel("Message", { exact: true });
   await prompt.fill("hello");
   await prompt.press("Enter");
-  await expect(page.getByText("Mock reply from code: hello")).toBeVisible();
+  await expect(page.getByText("Mock reply from Qwen3-8B: hello")).toBeVisible();
   await prompt.fill("unsent draft");
   await page.route("**/admin/catalog", (r) =>
     r.fulfill({ json: ["loom-fun/browser-fixture"] }),
@@ -42,16 +42,18 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   await expect(prompt).toHaveValue("unsent draft");
   await model.click();
   await expect(
-    page.getByRole("button", { name: "Options for code" }),
+    page.getByRole("button", { name: "Options for Qwen3-8B" }),
   ).toHaveCount(0);
-  const pin = page.getByRole("button", { name: "Pin code", exact: true });
+  const pin = page.getByRole("button", { name: "Pin Qwen3-8B", exact: true });
   await pin.click();
   await expect(pin).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Unload code", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Unload Qwen3-8B", exact: true })
+    .click();
   await expect(pin).toHaveAttribute("aria-pressed", "true");
   await pin.click();
   await expect(
-    page.getByRole("button", { name: "Options for code" }),
+    page.getByRole("button", { name: "Options for Qwen3-8B" }),
   ).toBeVisible();
   await expect(page.locator(".chat-head")).toContainText("chat-16gb");
   await expect(prompt).toHaveCount(0);
@@ -68,10 +70,10 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   await page
     .getByRole("button", { name: "Unload browser-fixture", exact: true })
     .click();
-  await page.getByRole("link", { name: "code", exact: true }).click();
+  await page.getByRole("link", { name: "Qwen3-8B", exact: true }).click();
   await page.getByRole("button", { name: "Load model" }).click();
   await expect(prompt).toHaveValue("unsent draft");
-  await expect(page.getByText("Mock reply from code: hello")).toBeVisible();
+  await expect(page.getByText("Mock reply from Qwen3-8B: hello")).toBeVisible();
   await page.getByRole("button", { name: "Clear chat" }).click();
   await expect(prompt).toHaveValue("");
   await expect(
@@ -134,11 +136,11 @@ test("submitting clears the composer before the reply and restores it on error",
 }) => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => (release = resolve));
-  await page.route("**/admin/chat/code", async (route) => {
+  await page.route("**/admin/chat/Qwen3-8B", async (route) => {
     await pending;
     await route.fulfill({ status: 400, body: "No displayable answer" });
   });
-  await page.goto("/chat/code");
+  await page.goto("/chat/Qwen3-8B");
   const prompt = page.getByLabel("Message", { exact: true });
   await prompt.fill("retry this");
   await prompt.press("Enter");
@@ -160,7 +162,7 @@ test("reload restores an in-flight prompt without resending and reports a partia
   let requests = 0;
   let release!: () => void;
   const pending = new Promise<void>((resolve) => (release = resolve));
-  await page.route("**/admin/chat/code", async (route) => {
+  await page.route("**/admin/chat/Qwen3-8B", async (route) => {
     if (++requests === 1) {
       await pending;
       await route.abort().catch(() => {});
@@ -171,7 +173,7 @@ test("reload restores an in-flight prompt without resending and reports a partia
       body: 'data: {"choices":[{"delta":{"content":"partial text"},"finish_reason":"length"}]}\r\n\r\ndata: {"choices":[],"usage":{"completion_tokens":3}}\r\n\r\ndata: [DONE]\r\n\r\n',
     });
   });
-  await page.goto("/chat/code");
+  await page.goto("/chat/Qwen3-8B");
   const prompt = page.getByLabel("Message", { exact: true });
   await prompt.fill("continue");
   await prompt.press("Enter");
@@ -193,7 +195,7 @@ test("reload restores an in-flight prompt without resending and reports a partia
 test("Stop interrupts a live reply and keeps the visible text", async ({
   page,
 }) => {
-  await page.goto("/chat/code");
+  await page.goto("/chat/Qwen3-8B");
   const prompt = page.getByLabel("Message", { exact: true });
   await prompt.fill("word ".repeat(100) + "finalword");
   await prompt.press("Enter");
@@ -265,12 +267,14 @@ test("cancelling Add model clears the form without downloading", async ({
 });
 
 test("removal is confirmed, not triggered by navigation", async ({ page }) => {
-  await page.goto("/remove/instruct");
+  await page.goto("/remove/Llama-3-2-3B-Instruct");
   await expect(
-    page.getByRole("heading", { name: "Remove instruct?" }),
+    page.getByRole("heading", { name: "Remove Llama-3-2-3B-Instruct?" }),
   ).toBeVisible();
   await page.getByRole("link", { name: "Cancel" }).click();
-  await page.getByRole("button", { name: "Options for instruct" }).click();
+  await page
+    .getByRole("button", { name: "Options for Llama 3.2 3B Instruct" })
+    .click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Model settings" });
   await dialog.getByLabel("Display label").fill("My model");
@@ -278,7 +282,7 @@ test("removal is confirmed, not triggered by navigation", async ({ page }) => {
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("link", { name: "My model" })).toHaveAttribute(
     "href",
-    "/chat/instruct",
+    "/chat/Llama-3-2-3B-Instruct",
   );
   await page.reload();
   await page.getByRole("button", { name: "Options for My model" }).click();
@@ -287,8 +291,10 @@ test("removal is confirmed, not triggered by navigation", async ({ page }) => {
   await expect(
     page.getByRole("navigation", { name: "Downloaded models" }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "code Loaded" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "instruct" })).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Qwen3-8B Loaded" }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "My model" })).toHaveCount(0);
 });
 
 test("setup retries and continues to the requested screen", async ({
