@@ -1,6 +1,6 @@
 # Lum architecture
 
-**Decision:** Lum is a Rust application for managing local Loom chat models on a Linux server. Our application code, including CLI, HTTP handlers, UI behavior and integration tests, is Rust. HTML/CSS are presentation assets. `hrx-loom[hf]` is a separately installed runtime dependency; Lum may launch its tools but does not import its Python modules, manage a virtualenv, or require Python to build. Initial integration target: hrx-loom 0.3.0.
+**Decision:** Lum is a Rust application for managing local Loom chat models on a Linux server. Our application code, including CLI, HTTP handlers, UI behavior and integration tests, is Rust. HTML/CSS are presentation assets. `hrx-loom[hf]` is an external execution engine. Lum does not import its Python modules or need Python to build. The Rust manager owns installation into isolated version-specific environments, invokes verified tools as child processes, and can optionally use an explicit service-readable external SDK instead. Initial integration target: hrx-loom 0.3.0.
 
 ## Process and network boundaries
 
@@ -32,7 +32,7 @@ Download does not imply start. Starting binds an installed package to an alias w
 
 Keep command-line arguments and native HTTP payloads in a Loom adapter. Invoke binaries with argument vectors, not a shell. Start with trusted `loom-fun` text packages, not arbitrary GGUF files. Use streaming with backpressure and cancellation; do not buffer a completion before returning it to the caller. The playground uses the same inference path as API clients. Label time to first text and end-to-end output tokens/s separately from engine decode throughput. Use reported token counts; if unavailable, show unavailable.
 
-Prefer server-rendered views and compiled Rust/Wasm only where interactive behavior needs it. Reuse the native telemetry dashboard rather than reimplement its counters. The ultimate deployment artifact is the manager binary with embedded UI assets, plus the separately versioned Loom installation.
+Prefer server-rendered views and compiled Rust/Wasm only where interactive behavior needs it. Reuse the native telemetry dashboard rather than reimplement its counters. The manager embeds UI assets and the supported SDK wheel lock. A first boot provisions `runtimes/<version>/` beneath Lum state as the service user; only successful tool probes publish the completion marker. Model storage is independent. Future UI switching should select from curated, hash-locked versions: install the candidate alongside the working version, drain requests, restart and probe the candidate, restore registrations, and roll back on failure. No web-triggered root package upgrades or arbitrary binary URLs. Updating the **Lum** executable remains an OS-package-manager operation.
 
 ## Delivery and acceptance
 

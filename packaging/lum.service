@@ -1,7 +1,6 @@
 [Unit]
 Description=Lum local model service
 Documentation=file:/usr/share/doc/lum/INSTALL.md
-ConditionFileIsExecutable=/opt/lum/runtime/bin/loom-serve
 StartLimitIntervalSec=60
 StartLimitBurst=5
 

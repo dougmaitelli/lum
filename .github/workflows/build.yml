@@ -38,26 +38,36 @@ jobs:
             /usr/bin/lum --help
             systemctl is-enabled lum.service
             test -f /etc/lum/lum.env
+            # Exercise the same unit-free path offered by the manual tarball.
+            LUM_DEVICE=task XDG_DATA_HOME=/tmp/lum-ci /usr/bin/lum run >/tmp/lum.log 2>&1 & pid=$!
+            for i in $(seq 1 180); do grep -q "Lum library:" /tmp/lum.log && break; sleep 1; done
+            grep -q "Lum library:" /tmp/lum.log || { cat /tmp/lum.log; exit 1; }
+            kill -TERM "$pid"; wait "$pid"
+            test -x /tmp/lum-ci/lum/runtimes/0.3.0/bin/loom-serve
             dnf remove -y lum
             test ! -e /etc/systemd/system/multi-user.target.wants/lum.service
           '
       - name: Exercise native lifecycle and installed DEB on CPU
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y python3-venv
-          sudo python3 -m venv /opt/lum/runtime
-          sudo /opt/lum/runtime/bin/pip install 'hrx-loom[hf]==0.3.0'
-          PATH="/opt/lum/runtime/bin:$PATH" cargo test --locked -- --ignored
+          # No preinstalled Loom and no uv on the service's PATH are required.
+          test ! -e /opt/lum/runtime
           # A CPU-only runner needs neither GPU group membership nor an AMD device.
           sudo mkdir -p /etc/systemd/system/lum.service.d
           printf '[Service]\nSupplementaryGroups=\nEnvironmentFile=\nEnvironment=LUM_DEVICE=task\n' | sudo tee /etc/systemd/system/lum.service.d/ci.conf
           sudo apt-get install -y ./dist/*.deb
           systemctl is-enabled lum.service
           systemd-analyze verify lum.service
-          sudo systemctl restart lum.service
-          sudo curl --fail --retry 10 --retry-connrefused --retry-delay 1 --unix-socket /run/lum/engine.sock http://localhost/readyz
-          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:9390/ -o "$RUNNER_TEMP/library.html"
-          grep -q 'Model library' "$RUNNER_TEMP/library.html"
+          for i in $(seq 1 180); do
+            curl -fsS http://127.0.0.1:9390/ -o "$RUNNER_TEMP/library.html" && grep -q 'Model library' "$RUNNER_TEMP/library.html" && break
+            sleep 1
+          done
+          grep -q 'Model library' "$RUNNER_TEMP/library.html" || { sudo journalctl -u lum --no-pager; exit 1; }
+          sudo curl --fail --unix-socket /run/lum/engine.sock http://localhost/readyz
+          # Fixture tests run unprivileged with an independent SDK, not the service's private state.
+          /usr/bin/python3 -m venv "$RUNNER_TEMP/fixtures"
+          "$RUNNER_TEMP/fixtures/bin/python" -m pip install --require-hashes --only-binary=:all: -r runtimes/hrx-loom-0.3.0.lock
+          PATH="$RUNNER_TEMP/fixtures/bin:$PATH" cargo test --locked -- --ignored
           sudo apt-get purge -y lum
           test ! -e /run/lum/engine.sock
       - uses: actions/upload-artifact@v4

@@ -23,10 +23,10 @@ fn service_requires_a_runtime_directory() {
 }
 
 #[test]
-fn missing_tools_are_reported() {
+fn missing_external_tools_are_reported() {
     let out = Command::new(env!("CARGO_BIN_EXE_lum"))
         .arg("doctor")
-        .env("PATH", "/nonexistent")
+        .env("LUM_RUNTIME_BIN", "/nonexistent")
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));

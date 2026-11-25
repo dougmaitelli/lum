@@ -25,6 +25,8 @@ overrides:
     depends:
       - systemd
       - init-system-helpers
+      - python3 (>= 3.12)
+      - python3-venv
       - libc6 (>= 2.39)
       - libgcc-s1
     scripts:
@@ -35,6 +37,8 @@ overrides:
     depends:
       - systemd
       - glibc >= 2.39
+      - python3 >= 3.12
+      - python-pip-wheel
       - libgcc
     scripts:
       postinstall: packaging/hooks/rpm-post

@@ -73,7 +73,20 @@ impl IntoResponse for Problem {
 }
 type Ui<T> = std::result::Result<T, Problem>;
 
-pub fn router(app: App, port: u16) -> Router {
+#[derive(Clone)]
+pub enum Setup {
+    Preparing,
+    Failed(String),
+    Ready,
+}
+
+pub fn router(
+    app: App,
+    port: u16,
+    phase: tokio::sync::watch::Receiver<Setup>,
+    retry: Arc<tokio::sync::Notify>,
+    runtime: String,
+) -> Router {
     Router::new()
         .route("/", get(home))
         .route("/catalog", get(catalog))
@@ -83,6 +96,7 @@ pub fn router(app: App, port: u16) -> Router {
         .route("/remove/{alias}", get(confirm))
         .route("/play/{alias}", get(play).post(chat))
         .route("/metrics", get(metrics))
+        .route("/runtime/retry", post(async || Redirect::to("/")))
         .route(
             "/style.css",
             get(async || {
@@ -92,6 +106,20 @@ pub fn router(app: App, port: u16) -> Router {
                 )
             }),
         )
+        .layer(middleware::from_fn(move |req: Request<Body>, next: Next| {
+            let state=phase.borrow().clone(); let name=runtime.clone(); let retry=retry.clone();
+            async move {
+                if matches!(state,Setup::Ready) || req.uri().path()=="/style.css" {return next.run(req).await;}
+                if req.method()==Method::POST && req.uri().path()=="/runtime/retry" && matches!(state,Setup::Failed(_)) {retry.notify_one();return Redirect::to("/").into_response();}
+                let (status,body)=match state {
+                    Setup::Failed(e)=>(StatusCode::SERVICE_UNAVAILABLE, maud::html!{p.warning {(e)} form method="post" action="/runtime/retry" {button {"Retry setup"}}}),
+                    _=>(StatusCode::OK, maud::html!{p {"Preparing the runtime and starting the engine. First installation needs internet access; later starts reuse the verified installation."}}),
+                };
+                let mut response=(status,view::page("Runtime setup",maud::html!{p.kicker {"RUNTIME / SETUP"} h1 {"Runtime setup"} section {h2 {(name)} (body) a href="/" {"Refresh"}}})).into_response();
+                if matches!(status,StatusCode::OK){response.headers_mut().insert("refresh","3; url=/".parse().unwrap());}
+                response
+            }
+        }))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(middleware::from_fn(move |req, next| {
             protect(req, next, port)

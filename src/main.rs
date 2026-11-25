@@ -1,5 +1,6 @@
 mod library;
 mod native;
+mod runtime;
 mod service;
 mod ui;
 mod view;
@@ -9,12 +10,36 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-const HELP: &str = "Usage:\n  lum doctor    Check Loom tools on PATH\n  lum serve     Run the local web library and private engine";
+const HELP: &str = "Usage:\n  lum run       Start Lum in the foreground with its own managed runtime\n  lum serve     Start the systemd-managed instance\n  lum doctor    Check managed-runtime prerequisites or an explicit external override";
 
 fn doctor() -> ExitCode {
+    let Some(bin) = env::var_os("LUM_RUNTIME_BIN").map(std::path::PathBuf::from) else {
+        let status = Command::new("/usr/bin/python3")
+            .args([
+                "-I",
+                "-c",
+                "import ensurepip, sys, venv; sys.exit(sys.version_info < (3, 12))",
+            ])
+            .status();
+        if status.is_ok_and(|s| s.success()) {
+            println!(
+                "Managed runtime: Python prerequisites available. Lum installs hrx-loom {} on first use; no Loom tools on PATH are needed.",
+                runtime::VERSION
+            );
+            return ExitCode::SUCCESS;
+        }
+        eprintln!(
+            "Managed installation requires /usr/bin/python3 (3.12+) with venv and ensurepip. Install the Lum RPM or DEB for OS dependencies."
+        );
+        return ExitCode::FAILURE;
+    };
+    if !bin.is_absolute() {
+        eprintln!("LUM_RUNTIME_BIN must be absolute");
+        return ExitCode::FAILURE;
+    }
     let mut healthy = true;
     for tool in ["loom-serve", "loom-fetch"] {
-        match Command::new(tool)
+        match Command::new(bin.join(tool))
             .arg("--help")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -42,7 +67,7 @@ fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().skip(1).collect();
     match args.as_slice() {
         [arg] if arg == "doctor" => doctor(),
-        [arg] if arg == "serve" => match service::run() {
+        [arg] if arg == "serve" || arg == "run" => match service::run(arg == "run") {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("Lum service failed: {e:#}");

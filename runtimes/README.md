@@ -1,0 +1,5 @@
+# Managed SDK manifests
+
+The Rust binary embeds `hrx-loom-0.3.0.lock` and installs wheel distributions only, from PyPI, with pip hash verification. The lock includes the Hugging Face extra and transitive dependencies. Upgrading Lum does not upgrade a user's uv environment, and web requests cannot select arbitrary wheel URLs, indexes or package names.
+
+To propose another supported version, generate a new lock from a single `hrx-loom[hf]==<version>` requirement, review package names and hashes, and test the complete fetch/serve contract on supported distributions before selecting it in `src/runtime.rs`. This lock was generated with `uv pip compile --universal --python-version 3.12 --generate-hashes --only-binary=:all: --no-header --no-annotate --default-index https://pypi.org/simple`. uv is only a maintainer tool; it is not used at runtime. Keep old supported version directories intact when selecting a different version. Runtime selection/rollback from the UI is a future feature, not part of first-boot setup.

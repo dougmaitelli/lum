@@ -1,89 +1,158 @@
 use crate::{
     library::Library,
     native::Native,
-    ui::{self, App},
+    runtime::Runtime,
+    ui::{self, App, Setup},
 };
 use anyhow::{Context, Result, bail, ensure};
 use rustix::process::{Pid, Signal, kill_process};
-use std::{env, path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    env,
+    fs::{DirBuilder, File, OpenOptions},
+    os::unix::fs::DirBuilderExt,
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     net::TcpListener,
     process::{Child, Command},
     signal::unix::{SignalKind, signal},
+    sync::{Notify, watch},
     time::{sleep, timeout},
 };
 
 fn directory(name: &str) -> Result<PathBuf> {
     let dir = env::var_os(name)
         .map(PathBuf::from)
-        .with_context(|| format!("{name} is missing; start lum.service with systemd"))?;
+        .with_context(|| format!("{name} is missing; start lum.service or use `lum run`"))?;
     ensure!(dir.is_absolute(), "{name} must be absolute");
     Ok(dir)
 }
+fn private_dir(dir: &Path) -> Result<()> {
+    DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    Ok(())
+}
+fn instance_lock(state: &Path) -> Result<File> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(state.join("instance.lock"))?;
+    file.try_lock()
+        .context("Another Lum process owns this state directory")?;
+    Ok(file)
+}
+fn directories(foreground: bool) -> Result<(PathBuf, PathBuf)> {
+    if !foreground {
+        return Ok((
+            directory("RUNTIME_DIRECTORY")?,
+            directory("STATE_DIRECTORY")?,
+        ));
+    }
+    let data = match env::var_os("XDG_DATA_HOME").filter(|s| !s.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => directory("HOME")?.join(".local/share"),
+    };
+    ensure!(data.is_absolute(), "XDG_DATA_HOME must be absolute");
+    let state = data.join("lum");
+    let runtime = match env::var_os("XDG_RUNTIME_DIR").filter(|s| !s.is_empty()) {
+        Some(dir) => PathBuf::from(dir).join("lum"),
+        None => state.join("run"),
+    };
+    ensure!(runtime.is_absolute(), "XDG_RUNTIME_DIR must be absolute");
+    private_dir(&state)?;
+    private_dir(&runtime)?;
+    Ok((runtime, state))
+}
+
 #[tokio::main(flavor = "current_thread")]
-pub async fn run() -> Result<()> {
-    let runtime = directory("RUNTIME_DIRECTORY")?;
-    let lib = Library::open(&directory("STATE_DIRECTORY")?)?;
-    let bin = PathBuf::from(
-        env::var_os("LUM_RUNTIME_BIN").unwrap_or_else(|| "/opt/lum/runtime/bin".into()),
-    );
-    ensure!(bin.is_absolute(), "LUM_RUNTIME_BIN must be absolute");
+pub async fn run(foreground: bool) -> Result<()> {
+    let (runtime, state) = directories(foreground)?;
+    private_dir(&state)?;
+    let _lock = instance_lock(&state)?;
     let port: u16 = env::var("LUM_ADMIN_PORT")
         .unwrap_or_else(|_| "9390".into())
         .parse()
         .context("Invalid LUM_ADMIN_PORT")?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
         .await
-        .context("bind loopback admin listener")?;
+        .context("bind loopback admin listener; set LUM_ADMIN_PORT to use another port")?;
     let port = listener.local_addr()?.port();
+    let lib = Library::open(&state)?;
+    let sdk = Runtime::select(&state)?;
     let socket = runtime.join("engine.sock");
     let engine = Native::new(&socket)?;
-    let app = App::new(lib.clone(), engine.clone(), bin.join("loom-fetch"))?;
+    let app = App::new(lib.clone(), engine.clone(), sdk.bin().join("loom-fetch"))?;
+    let (phase, rx) = watch::channel(Setup::Preparing);
+    let retry = Arc::new(Notify::new());
+    let router = ui::router(app, port, rx, retry.clone(), sdk.description());
     let mut term = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
-    let mut child = Command::new(bin.join("loom-serve"))
-        .args([
-            format!(
-                "--device={}",
-                env::var("LUM_DEVICE").unwrap_or_else(|_| "amdgpu".into())
-            ),
-            format!(
-                "--pool_backing={}",
-                env::var("LUM_POOL_BACKING").unwrap_or_else(|_| "fixed".into())
-            ),
-            format!("--listen=unix:{}", socket.display()),
-        ])
-        .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .context("launch loom-serve")?;
-    let run = async {
-        timeout(Duration::from_secs(20), async {
-            while engine.ready().await.is_err() {
-                sleep(Duration::from_millis(80)).await;
-            }
-        })
-        .await
-        .context("Engine did not become ready")?;
-        for m in lib
-            .list()?
-            .into_iter()
-            .filter(|m| m.desired && m.state == "installed")
-        {
-            if let Err(e) = engine
-                .register(&m.alias, &lib.package(&m.alias), &m.preset)
-                .await
-            {
-                lib.finish(&m.alias, "installed", &format!("Restore failed: {e:#}"))?;
+    eprintln!("Lum setup: http://127.0.0.1:{port}/");
+    let mut child = None;
+    let manager = async {
+        loop {
+            phase.send_replace(Setup::Preparing);
+            match sdk.ensure().await {
+                Ok(()) => break,
+                Err(e) => {
+                    eprintln!("Runtime setup failed: {e:#}");
+                    phase.send_replace(Setup::Failed(format!("{e:#}")));
+                    retry.notified().await;
+                }
             }
         }
-        eprintln!("Lum library: http://127.0.0.1:{port}/");
-        axum::serve(listener, ui::router(app, port))
+        child = Some(
+            Command::new(sdk.bin().join("loom-serve"))
+                .args([
+                    format!(
+                        "--device={}",
+                        env::var("LUM_DEVICE").unwrap_or_else(|_| "amdgpu".into())
+                    ),
+                    format!(
+                        "--pool_backing={}",
+                        env::var("LUM_POOL_BACKING").unwrap_or_else(|_| "fixed".into())
+                    ),
+                    format!("--listen=unix:{}", socket.display()),
+                ])
+                .stdin(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .context("launch loom-serve")?,
+        );
+        let wait = child.as_mut().unwrap().wait();
+        let ready = async {
+            timeout(Duration::from_secs(20), async {
+                while engine.ready().await.is_err() {
+                    sleep(Duration::from_millis(80)).await;
+                }
+            })
             .await
-            .context("admin listener")
+            .context("Engine did not become ready")?;
+            for m in lib
+                .list()?
+                .into_iter()
+                .filter(|m| m.desired && m.state == "installed")
+            {
+                if let Err(e) = engine
+                    .register(&m.alias, &lib.package(&m.alias), &m.preset)
+                    .await
+                {
+                    lib.finish(&m.alias, "installed", &format!("Restore failed: {e:#}"))?;
+                }
+            }
+            phase.send_replace(Setup::Ready);
+            eprintln!("Lum library: http://127.0.0.1:{port}/");
+            std::future::pending::<Result<()>>().await
+        };
+        tokio::select! {s=wait=>bail!("loom-serve exited: {}",s?),r=ready=>r}
     };
-    let result = tokio::select! {r=child.wait()=>{bail!("loom-serve exited: {}",r?)},r=run=>r,_=term.recv()=>Ok(()),_=interrupt.recv()=>Ok(())};
-    stop(&mut child).await?;
+    let result = tokio::select! {r=manager=>r,r=axum::serve(listener,router)=>r.context("admin listener"),_=term.recv()=>Ok(()),_=interrupt.recv()=>Ok(())};
+    if let Some(mut child) = child {
+        stop(&mut child).await?;
+    }
     result
 }
 async fn stop(child: &mut Child) -> Result<()> {

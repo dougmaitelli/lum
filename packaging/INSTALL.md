@@ -4,17 +4,15 @@ Use **the RPM on Fedora 44** and **the DEB on Ubuntu 24.04+ or Debian 13**. The 
 
 The service starts the Lum web library on **127.0.0.1:9390** and one private Loom engine on a Unix socket. No LAN API or public listener is enabled. Lum runs as an unprivileged service account; neither login nor `loginctl enable-linger` is needed for boot startup.
 
-## 1. Install the external runtime once
+## 1. Runtime setup is automatic
 
-Lum is Rust; Python is needed here only for the separately distributed Loom SDK. Use Python 3.12 or newer. On Fedora install `python3` and `python3-pip` with `dnf`; on Debian/Ubuntu install `python3` and `python3-venv` with `apt`. Create the **root-owned, system-readable** environment in the service's expected location (not in a user's home):
+**These instructions apply to v0.1.1 and later.** The original v0.1.0 release requires an external SDK; see its [version-specific guide](https://github.com/dougmaitelli/lum/blob/v0.1.0/packaging/INSTALL.md).
 
-```sh
-sudo install -d -m 0755 /opt/lum
-sudo python3 -m venv /opt/lum/runtime
-sudo /opt/lum/runtime/bin/python -m pip install 'hrx-loom[hf]==0.3.0'
-```
+Do not install Loom or uv for Lum. The RPM/DEB installs the OS Python prerequisites; on a manual tarball installation supply `/usr/bin/python3` (3.12+) with venv and ensurepip (`python3-venv` on Debian/Ubuntu; `python3` and `python-pip-wheel` on Fedora). On first start Lum downloads the hash-locked hrx-loom 0.3.0 wheels and Hugging Face dependencies from PyPI as the unprivileged service account. The library URL shows setup status and allows retry on failure. Subsequent starts reuse the verified runtime without network access. Model downloads are separate. For restricted networks an administrator may instead specify `LUM_RUNTIME_BIN=/absolute/service-readable/bin` in `lum.env`; Lum never modifies an external SDK. No personal uv install is searched or changed.
 
-On your Strix Halo, check `/opt/lum/runtime/bin/amdf-info --format=json` and `getent group render video`. The unit grants these supplementary groups for device access. The host kernel/driver and device permissions must support Loom. For CPU-only hosts see below. The native runtime and model weights are not bundled or downloaded by a package maintainer script.
+**Just testing?** After extracting the updated manual tarball, run `./lum run` as your normal user and open the printed URL. No systemd installation is needed. It uses `$XDG_DATA_HOME/lum` (default `~/.local/share/lum`) for the library and versioned runtimes, and `$XDG_RUNTIME_DIR/lum` for the private engine socket when available. Stop with Ctrl-C. To test without an AMD GPU use `LUM_DEVICE=task ./lum run`.
+
+On Strix Halo the host AMD driver, device permissions and `render`/`video` groups still need to work. Lum manages userspace Loom, not host GPU drivers.
 
 ## 2. Install Lum
 
@@ -32,7 +30,7 @@ sudo dnf install ./lum*.rpm
 sudo apt install ./lum*.deb
 ```
 
-Both packages install `/usr/bin/lum`, `/usr/lib/systemd/system/lum.service`, `/etc/lum/lum.env`, and this guide. On first install they enable `lum.service` for boot and start it if systemd is running and the external runtime is present. Debian service-start policy is respected. When installing into an image/chroot, enablement is recorded on disk. If the runtime is installed later, run `sudo systemctl start lum.service`.
+Both packages install `/usr/bin/lum`, `/usr/lib/systemd/system/lum.service`, `/etc/lum/lum.env`, and this guide. On first install they enable `lum.service` for boot and start it if systemd is running. Debian service-start policy is respected. When installing into an image/chroot, enablement is recorded on disk. After upgrading from an older release that was skipped for unmet conditions, run `sudo systemctl enable --now lum.service`.
 
 ### Manual (no package manager)
 
@@ -53,7 +51,6 @@ For a manual upgrade, repeat the file installation, reload units, and `sudo syst
 ## 3. Verify and configure
 
 ```sh
-PATH="/opt/lum/runtime/bin:$PATH" lum doctor
 systemctl is-enabled lum.service       # enabled: will start on subsequent boots
 systemctl status lum.service --no-pager
 sudo curl --fail --unix-socket /run/lum/engine.sock http://localhost/readyz
@@ -69,7 +66,7 @@ Edit `/etc/lum/lum.env` for runtime settings, then `sudo systemctl restart lum.s
 SupplementaryGroups=
 ```
 
-If the unit reports a failed condition, check that `/opt/lum/runtime/bin/loom-serve` exists and is executable. For GPU errors inspect service logs and device permissions; on Fedora also check audit logs for SELinux denials instead of disabling SELinux. After correcting repeated startup failures, run `sudo systemctl reset-failed lum && sudo systemctl start lum`.
+If the unit reports an unmet condition for `/opt/lum`, inspect `systemctl cat lum.service`: the old unit or a local override is still loaded. The updated unit does not have a Loom-path prerequisite. For runtime setup errors open the UI or read `journalctl -u lum -b`; after fixing Python, disk space or network access use **Retry setup**. For GPU errors inspect service logs and device permissions; on Fedora also check audit logs for SELinux denials instead of disabling SELinux. After correcting repeated startup failures, run `sudo systemctl reset-failed lum && sudo systemctl start lum`.
 
 ## Open the web UI
 
@@ -90,4 +87,4 @@ sudo rm -f /usr/bin/lum /usr/lib/systemd/system/lum.service /usr/share/doc/lum/I
 sudo systemctl daemon-reload
 ```
 
-Runtime files under `/opt/lum/runtime`, local overrides, and persistent state are not deleted automatically. Back up state before intentionally removing it. Do not rely on a dynamic service UID for manual ownership of files outside systemd-managed directories.
+Managed runtimes under `/var/lib/lum/runtimes/`, any legacy `/opt/lum/runtime`, local overrides, and persistent state are not deleted automatically. Back up state before intentionally removing it. Do not rely on a dynamic service UID for manual ownership of files outside systemd-managed directories.
