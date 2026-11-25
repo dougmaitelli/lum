@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    deb-systemd-helper unmask lum.service >/dev/null || true
+    if deb-systemd-helper --quiet was-enabled lum.service; then
+        deb-systemd-helper enable lum.service >/dev/null
+    else
+        deb-systemd-helper update-state lum.service >/dev/null
+    fi
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        if [ -z "${2:-}" ]; then
+            deb-systemd-invoke start lum.service
+        elif systemctl is-active --quiet lum.service; then
+            deb-systemd-invoke restart lum.service
+        fi
+    fi
+fi

@@ -1,0 +1,67 @@
+name: Build Linux distribution
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: linux-build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting and lint Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+      - name: Run Rust tests
+        run: cargo test --locked
+      - name: Build release binary
+        run: cargo build --release --locked
+      - name: Package binary, RPM and DEB
+        run: |
+          artifact=nfpm_2.49.0_Linux_x86_64.tar.gz
+          curl -fsSLo "$RUNNER_TEMP/$artifact" "https://github.com/goreleaser/nfpm/releases/download/v2.49.0/$artifact"
+          (cd "$RUNNER_TEMP" && echo "2afaa5ffb5e3493402e31e7c67a5a1fb42133e3f66fc315ca0051934125561c7  $artifact" | sha256sum -c - && tar xzf "$artifact" nfpm)
+          PATH="$RUNNER_TEMP:$PATH" packaging/build.sh
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Install RPM in Fedora 44 and check boot enablement
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" fedora:44 sh -ec '
+            dnf install -y /dist/*.rpm
+            /usr/bin/lum --help
+            systemctl is-enabled lum.service
+            test -f /etc/lum/lum.env
+            dnf remove -y lum
+            test ! -e /etc/systemd/system/multi-user.target.wants/lum.service
+          '
+      - name: Exercise native lifecycle and installed DEB on CPU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-venv
+          sudo python3 -m venv /opt/lum/runtime
+          sudo /opt/lum/runtime/bin/pip install 'hrx-loom[hf]==0.3.0'
+          PATH="/opt/lum/runtime/bin:$PATH" cargo test --locked -- --ignored
+          # A CPU-only runner needs neither GPU group membership nor an AMD device.
+          sudo mkdir -p /etc/systemd/system/lum.service.d
+          printf '[Service]\nSupplementaryGroups=\nEnvironmentFile=\nEnvironment=LUM_DEVICE=task\n' | sudo tee /etc/systemd/system/lum.service.d/ci.conf
+          sudo apt-get install -y ./dist/*.deb
+          systemctl is-enabled lum.service
+          systemd-analyze verify lum.service
+          sudo systemctl restart lum.service
+          sudo curl --fail --retry 10 --retry-connrefused --retry-delay 1 --unix-socket /run/lum/engine.sock http://localhost/readyz
+          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:9390/ -o "$RUNNER_TEMP/library.html"
+          grep -q 'Model library' "$RUNNER_TEMP/library.html"
+          sudo apt-get purge -y lum
+          test ! -e /run/lum/engine.sock
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lum-linux-x86_64
+          path: dist/
+          if-no-files-found: error

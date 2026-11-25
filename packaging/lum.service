@@ -1,0 +1,37 @@
+[Unit]
+Description=Lum local model service
+Documentation=file:/usr/share/doc/lum/INSTALL.md
+ConditionFileIsExecutable=/opt/lum/runtime/bin/loom-serve
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/lum serve
+EnvironmentFile=-/etc/lum/lum.env
+DynamicUser=yes
+User=lum
+SupplementaryGroups=render video
+StateDirectory=lum
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/lum
+RuntimeDirectory=lum
+RuntimeDirectoryMode=0700
+Environment=HOME=/var/lib/lum
+UMask=0077
+# Let Lum stop its child first; systemd still cleans up the entire cgroup.
+KillMode=mixed
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# GPU device nodes and executable JIT mappings are required by Loom.
+
+[Install]
+WantedBy=multi-user.target

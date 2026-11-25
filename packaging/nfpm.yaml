@@ -1,0 +1,42 @@
+name: lum
+arch: amd64
+platform: linux
+section: utils
+version: ${VERSION}
+release: 1
+maintainer: Lum maintainers <root@localhost>
+description: Local web library and chat playground for hrx-loom models
+# No upstream distribution license has been declared for Lum yet.
+license: LicenseRef-Unspecified
+contents:
+  - src: target/release/lum
+    dst: /usr/bin/lum
+    file_info:
+      mode: 0755
+  - src: packaging/lum.service
+    dst: /usr/lib/systemd/system/lum.service
+  - src: packaging/lum.env
+    dst: /etc/lum/lum.env
+    type: config|noreplace
+  - src: packaging/INSTALL.md
+    dst: /usr/share/doc/lum/INSTALL.md
+overrides:
+  deb:
+    depends:
+      - systemd
+      - init-system-helpers
+      - libc6 (>= 2.39)
+      - libgcc-s1
+    scripts:
+      postinstall: packaging/hooks/deb-postinst
+      preremove: packaging/hooks/deb-prerm
+      postremove: packaging/hooks/deb-postrm
+  rpm:
+    depends:
+      - systemd
+      - glibc >= 2.39
+      - libgcc
+    scripts:
+      postinstall: packaging/hooks/rpm-post
+      preremove: packaging/hooks/rpm-preun
+      postremove: packaging/hooks/rpm-postun

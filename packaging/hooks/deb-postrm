@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+case "$1" in
+    remove) deb-systemd-helper mask lum.service >/dev/null ;;
+    purge) deb-systemd-helper purge lum.service >/dev/null
+           deb-systemd-helper unmask lum.service >/dev/null ;;
+esac
+if [ -d /run/systemd/system ]; then systemctl daemon-reload; fi

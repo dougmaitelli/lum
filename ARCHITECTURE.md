@@ -1,0 +1,42 @@
+# Lum architecture
+
+**Decision:** Lum is a Rust application for managing local Loom chat models on a Linux server. Our application code, including CLI, HTTP handlers, UI behavior and integration tests, is Rust. HTML/CSS are presentation assets. `hrx-loom[hf]` is a separately installed runtime dependency; Lum may launch its tools but does not import its Python modules, manage a virtualenv, or require Python to build. Initial integration target: hrx-loom 0.3.0.
+
+## Process and network boundaries
+
+```text
+Browser (localhost or SSH tunnel) ── admin listener ─┐
+                                                   ├── lum (Tokio + Axum) ── SQLite + package directory
+Local services ── inference listener, bearer key ───┘       │
+                                                          ├── loom-fetch (finite download job)
+                                                          └── loom-serve (one private multi-model engine)
+```
+
+Use one Cargo package and one managed Linux service, not one service per model. Add modules as features land; don't split this into independently deployed services. The inference listener exposes an explicit allowlist (`GET /v1/models`, `POST /v1/chat/completions`), never a catch-all proxy. Both listeners default to loopback. Binding inference to the LAN is explicit; use TLS or a trusted tunnel on untrusted networks. Do not forward admin credentials or native control headers. The native engine and telemetry remain private.
+
+One engine reduces scheduling and memory contention between independent runtimes on the shared GPU. The tradeoff is a shared failure domain: an engine crash ends all in-flight requests. The supervisor must report that failure, restart with bounded backoff, and restore desired registrations; never silently replay a chat request.
+
+**Current deployment stage:** A single boot-enabled unit runs the Rust manager, which owns a loopback Axum UI, SQLite library and private `loom-serve` child. Start/Stop persist desired registrations; startup restores selected aliases. An unexpected child exit fails the manager so systemd can restart the unit with rate limiting. The separate LAN listener and streaming playground in the target architecture are not implemented yet. See [installation and service operations](packaging/INSTALL.md).
+
+## State ownership
+
+| Owner | Authoritative facts |
+|---|---|
+| SQLite (Lum) | Stable alias, trusted repo and immutable revision, preset, local installation path, restore-on-boot intent, download outcome. |
+| Package directory | Downloaded files. Fetch into staging and publish only after verification succeeds. Interrupted downloads must never appear installed. |
+| Loom | Live registration, readiness, admission, memory residency and runtime counters. A successful registration request is **not** a ready model. |
+
+Download does not imply start. Starting binds an installed package to an alias without restarting the engine. Stopping drains and unregisters only that alias. Reconcile desired registrations against observed state on startup; surface individual failures without taking healthy aliases offline. Never delete an installation still in use. Do not automatically evict another running model to start a new one.
+
+## Integration and UI
+
+Keep command-line arguments and native HTTP payloads in a Loom adapter. Invoke binaries with argument vectors, not a shell. Start with trusted `loom-fun` text packages, not arbitrary GGUF files. Use streaming with backpressure and cancellation; do not buffer a completion before returning it to the caller. The playground uses the same inference path as API clients. Label time to first text and end-to-end output tokens/s separately from engine decode throughput. Use reported token counts; if unavailable, show unavailable.
+
+Prefer server-rendered views and compiled Rust/Wasm only where interactive behavior needs it. Reuse the native telemetry dashboard rather than reimplement its counters. The ultimate deployment artifact is the manager binary with embedded UI assets, plus the separately versioned Loom installation.
+
+## Delivery and acceptance
+
+1. Runtime discovery (`lum doctor`); then supervise one private engine and exercise readiness/shutdown using CPU fixtures.
+2. Add persistent installs, download jobs, registration and restore; test interrupted downloads, failed preparation and restart recovery.
+3. Add the library, chat playground and inference-only listener. Test streaming, client disconnects and rejection of admin operations on the LAN port.
+4. On the target Strix Halo, run **two real packages concurrently**. Record memory before/after each start and first inference, first-text latency and output throughput alone and under contention. Stop one alias while the other streams. Restart the service and verify only selected aliases return. CPU fixtures validate lifecycle, not GPU capacity or performance.
