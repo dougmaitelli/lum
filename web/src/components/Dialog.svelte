@@ -6,10 +6,12 @@
     actions,
     onclose,
     locked = false,
+    closeLabel = "Close",
   }: {
     title: string;
     children: Snippet;
-    actions: Snippet;
+    actions?: Snippet;
+    closeLabel?: string;
     onclose?: () => void;
     locked?: boolean;
   } = $props();
@@ -33,8 +35,8 @@
   <h2>{title}</h2>
   {@render children()}
   <footer>
-    <button type="button" disabled={locked} onclick={close}>Close</button>
-    {@render actions()}
+    <button type="button" disabled={locked} onclick={close}>{closeLabel}</button>
+    {@render actions?.()}
   </footer>
 </dialog>
 

@@ -25,7 +25,7 @@ Open **http://127.0.0.1:9399/**. Rust starts an isolated mock Loom engine and Vi
 | `e2e/` | Independent Playwright package that exercises the embedded UI against the mock runtime |
 | `packaging/`, `.github/workflows/` | Linux distribution, validation and tag-only GitHub Releases |
 
-Rust serves the same Vite bundle for `/`, `/chat/{alias}`, `/api` and `/remove/{alias}`. Svelte checks `/admin/runtime` before mounting the requested screen and offers retry on failed setup. `/admin/state` returns model, transfer and system snapshots; `/admin/chat/{alias}`, `/admin/models/{alias}/{op}` and `/admin/downloads` accept same-origin JSON writes. `/admin/api` lists endpoint and key metadata; key creation and revocation are writes under `/admin/keys`. The plaintext secret is returned only on creation. Removal requires confirmation in the UI and is revalidated by the backend. No page is rendered from Rust templates. Do not expose `/admin` via the bearer-protected `/v1` listener.
+Rust serves the same Vite bundle for `/`, `/chat/{alias}` and `/api`. Svelte checks `/admin/runtime` before mounting the requested screen and offers retry on failed setup. `/admin/state` returns model, transfer and system snapshots; `/admin/chat/{alias}`, `/admin/models/{alias}/{op}` and `/admin/downloads` accept same-origin JSON writes. `/admin/api` lists endpoint and key metadata; key creation and revocation are writes under `/admin/keys`. The plaintext secret is returned only on creation. Removal requires confirmation in the UI and is revalidated by the backend. No page is rendered from Rust templates. Do not expose `/admin` via the bearer-protected `/v1` listener.
 
 ## Validate
 

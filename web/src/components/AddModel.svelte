@@ -1,6 +1,10 @@
 <script lang="ts">
   import { catalog, install, packagePresets, type Model } from "../api/admin";
-  let { failures, ondownload }: { failures: Model[]; ondownload: () => void } = $props();
+  let {
+    failures,
+    ondownload,
+    onremove,
+  }: { failures: Model[]; ondownload: () => void; onremove: (model: Model) => void } = $props();
   import Dialog from "./Dialog.svelte";
   let dialog: Dialog;
   let repo = $state(""),
@@ -99,7 +103,7 @@
     <details>
       <summary>Install failed: {m.alias}</summary>
       <pre class="warning">{m.error}</pre>
-      <a href={"/remove/" + m.alias}>Remove failed install to retry…</a>
+      <button type="button" onclick={() => onremove(m)}>Remove failed install to retry…</button>
     </details>
   {/each}
   <div>

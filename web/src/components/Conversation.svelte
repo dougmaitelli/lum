@@ -8,8 +8,14 @@
     online,
     working,
     onloadmodel,
-  }: { model: Model | undefined; online: boolean; working: boolean; onloadmodel: () => void } =
-    $props();
+    onfailure,
+  }: {
+    model: Model | undefined;
+    online: boolean;
+    working: boolean;
+    onloadmodel: () => void;
+    onfailure: (e: unknown) => void;
+  } = $props();
   function previous(): Turn[] {
     try {
       return JSON.parse(sessionStorage.getItem("lum.chat." + model?.alias) ?? "[]");
@@ -109,7 +115,8 @@
         turns = history;
         prompt = submitted;
       }
-      feedback = controller.signal.aborted ? "Generation stopped." : String(e);
+      feedback = controller.signal.aborted ? "Generation stopped." : "";
+      if (!controller.signal.aborted) onfailure(e);
     } finally {
       active = undefined;
       busy = false;

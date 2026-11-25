@@ -163,7 +163,7 @@ pub fn router(
         .route("/", get(index))
         .route("/api", get(index))
         .route("/chat/{alias}", get(index))
-        .route("/remove/{alias}", get(index))
+        .route("/favicon.svg", get(favicon))
         .route("/assets/chat.js", get(chat_bundle))
         .route("/assets/index.css", get(chat_css))
         .layer(DefaultBodyLimit::max(256 * 1024))
@@ -194,6 +194,12 @@ async fn chat_bundle() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript")],
         include_str!(concat!(env!("OUT_DIR"), "/ui/assets/chat.js")),
+    )
+}
+async fn favicon() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/svg+xml")],
+        include_str!(concat!(env!("OUT_DIR"), "/ui/favicon.svg")),
     )
 }
 async fn chat_css() -> impl IntoResponse {
@@ -249,7 +255,7 @@ async fn protect(req: Request<Body>, next: Next, listener: crate::config::Listen
     }
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_SECURITY_POLICY,"default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'".parse().unwrap());
+    headers.insert(header::CONTENT_SECURITY_POLICY,"default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'".parse().unwrap());
     headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response

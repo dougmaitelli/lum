@@ -3,7 +3,6 @@
   import { runtimeStatus, type RuntimeStatus } from "./api/admin";
   import Chat from "./pages/Chat.svelte";
   import Api from "./pages/Api.svelte";
-  import Remove from "./pages/Remove.svelte";
   import Setup from "./pages/Setup.svelte";
   const path = location.pathname;
   let status = $state<RuntimeStatus>(),
@@ -32,8 +31,6 @@
   <Setup {status} {error} />
 {:else if path === "/api"}
   <Api />
-{:else if path.startsWith("/remove/")}
-  <Remove alias={path.slice("/remove/".length)} />
 {:else}
   <Chat />
 {/if}

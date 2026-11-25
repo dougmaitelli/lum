@@ -5,6 +5,8 @@
   import StatusBar from "../components/StatusBar.svelte";
   import ModelSettings from "../components/ModelSettings.svelte";
   import Downloads from "../components/Downloads.svelte";
+  import ErrorDialog from "../components/ErrorDialog.svelte";
+  import RemoveModel from "../components/RemoveModel.svelte";
   import AddModel from "../components/AddModel.svelte";
   let data = $state<Snapshot>({
       models: [],
@@ -14,7 +16,6 @@
       progress: { stage: "", percent: null },
     }),
     selected = $state(location.pathname.split("/chat/")[1] || ""),
-    error = $state(""),
     stale = $state(false),
     working = $state(false);
   let add: AddModel, downloads: Downloads, settings: ModelSettings;
@@ -26,7 +27,9 @@
         .filter((m) => m.state === "downloading" || m.state === "queued")
         .sort((a, b) => a.state.localeCompare(b.state)),
     );
-  let newest = 0;
+  let errors: ErrorDialog, removal: RemoveModel;
+  let newest = 0,
+    lastModelError = "";
   async function refresh() {
     const id = ++newest;
     try {
@@ -36,6 +39,11 @@
       stale = false;
       if (!models.some((m) => m.alias === selected))
         selected = (models.find((m) => m.loaded) ?? models[0])?.alias ?? "";
+      const model = models.find((m) => m.alias === selected);
+      const key = model?.error ? `${model.alias}:${model.error}` : "";
+      if (model && key && key !== lastModelError)
+        errors.show(`Model error: ${model.label || model.alias}`, model.error);
+      lastModelError = key;
     } catch {
       if (id === newest) stale = true;
     }
@@ -43,12 +51,14 @@
   async function change(op: string, alias = current?.alias) {
     if (!alias || working) return;
     working = true;
-    error = "";
     try {
       await modelAction(alias, op);
       await refresh();
     } catch (e) {
-      error = String(e);
+      errors.show(
+        `Could not ${op === "start" ? "load" : op === "stop" ? "unload" : op} ${alias}`,
+        e,
+      );
     } finally {
       working = false;
     }
@@ -163,7 +173,15 @@
               >
                 Settings
               </button>
-              <a class="remove-action" href={"/remove/" + m.alias}>Remove</a>
+              <button
+                class="menu-action remove-action"
+                onclick={() => {
+                  document.getElementById(`options-${m.alias}`)?.hidePopover();
+                  removal.open(m);
+                }}
+              >
+                Remove
+              </button>
             </div>
           {/if}
         </div>
@@ -215,11 +233,6 @@
             Clear chat
           </button>
         {/if}
-        {#if error || current?.error}
-          <span class="warning">
-            {error || current?.error}
-          </span>
-        {/if}
       </div>
     </header>
 
@@ -230,14 +243,24 @@
         online={data.online && !stale}
         {working}
         onloadmodel={() => change("start")}
+        onfailure={(e) => errors.show("Chat error", e)}
       />
     {/key}
   </main>
   <StatusBar {data} {stale} />
+  <ErrorDialog bind:this={errors} />
+  <RemoveModel
+    bind:this={removal}
+    onremoved={async (alias) => {
+      if (location.pathname === `/chat/${alias}`) history.replaceState(null, "", "/");
+      await refresh();
+    }}
+  />
   <ModelSettings bind:this={settings} onsave={refresh} />
   <Downloads bind:this={downloads} {jobs} progress={data.progress} />
   <AddModel
     bind:this={add}
+    onremove={(model) => removal.open(model)}
     failures={data.models.filter((m) => m.state === "failed")}
     ondownload={() => {
       downloads.open();

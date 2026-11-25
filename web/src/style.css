@@ -195,20 +195,13 @@ nav p {
   background: transparent;
   border: 0;
   min-block-size: 0;
-}
-.model-options a,
-.model-options .menu-action {
   display: block;
   padding: 4px 8px;
-}
-.model-options a {
-  color: var(--text);
-  text-decoration: none;
 }
 .model-options .remove-action {
   color: #ff9292;
 }
-.model-options :is(a, .menu-action):hover {
+.model-options .menu-action:hover {
   background: var(--bg);
 }
 .model-row:hover,

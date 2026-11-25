@@ -4,6 +4,7 @@ fn main() {
     for path in [
         "src",
         "index.html",
+        "public",
         "package.json",
         "package-lock.json",
         "vite.config.js",

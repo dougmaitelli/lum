@@ -155,6 +155,9 @@ test("submitting clears the composer before the reply and restores it on error",
   } finally {
     release();
   }
+  const failure = page.getByRole("dialog", { name: "Chat error" });
+  await expect(failure.getByRole("alert")).toHaveText("No displayable answer");
+  await failure.getByRole("button", { name: "Close" }).click();
   await expect(prompt).toHaveValue("retry this");
   await expect(page.locator('[data-role="assistant"]')).toHaveCount(0);
 });
@@ -304,11 +307,17 @@ test("cancelling Add model clears the form without downloading", async ({
 });
 
 test("removal is confirmed, not triggered by navigation", async ({ page }) => {
-  await page.goto("/remove/Llama-3-2-3B-Instruct");
-  await expect(
-    page.getByRole("heading", { name: "Remove Llama-3-2-3B-Instruct?" }),
-  ).toBeVisible();
-  await page.getByRole("link", { name: "Cancel" }).click();
+  await page.goto("/chat/Qwen3-8B");
+  await page
+    .getByRole("button", { name: "Options for Llama 3.2 3B Instruct" })
+    .click();
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  const confirm = page.getByRole("dialog", {
+    name: "Remove Llama 3.2 3B Instruct?",
+  });
+  await expect(confirm).toBeVisible();
+  await expect(page).toHaveURL(/\/chat\/Qwen3-8B$/);
+  await confirm.getByRole("button", { name: "Cancel" }).click();
   await page
     .getByRole("button", { name: "Options for Llama 3.2 3B Instruct" })
     .click();
@@ -323,7 +332,7 @@ test("removal is confirmed, not triggered by navigation", async ({ page }) => {
   );
   await page.reload();
   await page.getByRole("button", { name: "Options for My model" }).click();
-  await page.getByRole("link", { name: "Remove", exact: true }).click();
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
   await page.getByRole("button", { name: "Remove files" }).click();
   await expect(
     page.getByRole("navigation", { name: "Downloaded models" }),

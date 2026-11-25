@@ -73,7 +73,7 @@ async fn foreground_setup_failure_is_recoverable_without_systemd() -> Result<()>
     for path in [
         "/",
         "/api",
-        "/remove/test",
+        "/favicon.svg",
         "/assets/index.css",
         "/assets/chat.js",
     ] {
