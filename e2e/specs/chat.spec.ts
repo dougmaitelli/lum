@@ -17,7 +17,10 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   const prompt = page.getByLabel("Message", { exact: true });
   await prompt.fill("hello");
   await prompt.press("Enter");
-  await expect(page.getByText("Mock reply from Qwen3-8B: hello")).toBeVisible();
+  const greeting = page.getByText(
+    "Hello! What would you like to work on today?",
+  );
+  await expect(greeting).toBeVisible();
   await prompt.fill("unsent draft");
   await page.route("**/admin/catalog", (r) =>
     r.fulfill({ json: ["loom-fun/browser-fixture"] }),
@@ -73,7 +76,7 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   await page.getByRole("link", { name: "Qwen3-8B", exact: true }).click();
   await page.getByRole("button", { name: "Load model" }).click();
   await expect(prompt).toHaveValue("unsent draft");
-  await expect(page.getByText("Mock reply from Qwen3-8B: hello")).toBeVisible();
+  await expect(greeting).toBeVisible();
   await page.getByRole("button", { name: "Clear chat" }).click();
   await expect(prompt).toHaveValue("");
   await expect(
@@ -199,7 +202,13 @@ test("chat renders fenced code as literal text, including unfinished blocks", as
   const snippet = "  <button>Example</button>\n";
   const message = `Example:\n\`\`\`html\n${snippet}\`\`\`\nAnother:\n~~~js\nconst n = 2;`;
   const prompt = page.getByLabel("Message", { exact: true });
-  await prompt.fill(message);
+  await page.route("**/admin/chat/Qwen3-8B", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ choices: [{ delta: { content: message }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+    }),
+  );
+  await prompt.fill("Show me two code examples.");
   await prompt.press("Enter");
   const response = page.locator('[data-role="assistant"]');
   await expect(response.locator("pre code").nth(1)).toHaveText("const n = 2;");
@@ -225,14 +234,14 @@ test("Stop interrupts a live reply and keeps the visible text", async ({
 }) => {
   await page.goto("/chat/Qwen3-8B");
   const prompt = page.getByLabel("Message", { exact: true });
-  await prompt.fill("word ".repeat(100) + "finalword");
+  await prompt.fill("Write a poem about Jupiter");
   await prompt.press("Enter");
   const answer = page.locator('[data-role="assistant"] p');
-  await expect(answer).toContainText("Mock");
+  await expect(answer).toContainText("On Jupiter");
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   await expect(page.locator("#feedback")).toHaveText("Generation stopped.");
   const partial = await answer.textContent();
-  expect(partial).not.toContain("finalword");
+  expect(partial).not.toContain("storm-lit sky.");
   await page.reload();
   await expect(answer).toHaveText(partial!.trim());
   await expect(

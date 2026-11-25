@@ -331,7 +331,7 @@ async fn isolated_preview_workflow() -> Result<()> {
         .error_for_status()?
         .text()
         .await?;
-    assert!(reply.contains("Mock reply from test: hello"));
+    assert!(reply.contains("Hello! What would you like to work on today?"));
     until(
         &client,
         &format!("{url}/metrics"),

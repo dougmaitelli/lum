@@ -73,6 +73,34 @@ async fn metrics(State(s): State<Shared>) -> String {
         s.lock().await.requests
     )
 }
+fn preview_reply(message: &str, request: u64) -> &'static str {
+    let prompt = message.trim().to_lowercase();
+    if prompt.contains("loaded") || prompt.contains("are you ready") {
+        return "Yes, I’m ready. What would you like to work on?";
+    }
+    if matches!(
+        prompt.trim_end_matches(['!', '.', '?']),
+        "hi" | "hello" | "hey"
+    ) {
+        return "Hello! What would you like to work on today?";
+    }
+    if prompt.contains("poem") && prompt.contains("jupiter") {
+        return "On Jupiter the winds run deep,\nwhere bands of cream and copper sweep.\nFour moons drift past the great red eye,\nfour lanterns in a storm-lit sky.";
+    }
+    if ["code", "python", "function", "```"]
+        .iter()
+        .any(|word| prompt.contains(word))
+    {
+        return "Here’s a small Python example:\n\n```python\ndef greet(name):\n    return f\"Hello, {name}!\"\n```\n\nTry calling `greet(\"Jupiter\")`.";
+    }
+    const REPLIES: [&str; 3] = [
+        "Let’s start with a concrete example. What would a good result look like for you?",
+        "I can help with that. Would you prefer a quick overview or a step-by-step walkthrough?",
+        "Which part would you like to explore first? We can work through the details together.",
+    ];
+    REPLIES[(request % REPLIES.len() as u64) as usize]
+}
+
 async fn chat(
     State(s): State<Shared>,
     Json(v): Json<Value>,
@@ -89,7 +117,7 @@ async fn chat(
         .and_then(|m| m["content"].as_str())
         .ok_or(StatusCode::BAD_REQUEST)?;
     s.requests += 1;
-    let text = format!("Mock reply from {a}: {message}");
+    let text = preview_reply(message, s.requests);
     let id = format!("chatcmpl-mock-{}", s.requests);
     if v["stream"] == true {
         let chunk = |delta: Value, finish: Value| json!({"id":id,"object":"chat.completion.chunk","created":0,"model":a,"choices":[{"index":0,"delta":delta,"finish_reason":finish}]});

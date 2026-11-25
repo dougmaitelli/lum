@@ -2,7 +2,7 @@
 
 Lum is a web manager for local hrx-loom chat models. One Rust service lets you download models from Hugging Face, chat with them in the browser, and serve them to OpenAI-compatible clients. Installed models share one private engine; you choose which ones to load or pin.
 
-![Lum Chat in mock mode: Qwen3-8B is pinned and loaded alongside an installed Llama 3.2 3B Instruct model, with its response above the message box](screenshots/library.png)
+![Lum Chat in mock mode: Qwen3-8B responds to a coding prompt with a syntax-highlighted Python greeting function](screenshots/library.png)
 
 ## Open Chat
 
