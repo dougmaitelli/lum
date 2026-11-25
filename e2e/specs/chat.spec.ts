@@ -142,14 +142,8 @@ test("reload restores an in-flight prompt without resending and reports a partia
       return;
     }
     await route.fulfill({
-      json: {
-        turns: [
-          { role: "user", content: "continue" },
-          { role: "assistant", content: "partial text" },
-        ],
-        metrics: "3 tok/s",
-        finish_reason: "length",
-      },
+      contentType: "text/event-stream",
+      body: 'data: {"choices":[{"delta":{"content":"partial text"},"finish_reason":"length"}]}\r\n\r\ndata: {"choices":[],"usage":{"completion_tokens":3}}\r\n\r\ndata: [DONE]\r\n\r\n',
     });
   });
   await page.goto("/chat/code");
@@ -169,6 +163,26 @@ test("reload restores an in-flight prompt without resending and reports a partia
   await expect(page.locator("#feedback")).toContainText(
     "Stopped at the model’s output limit",
   );
+});
+
+test("Stop interrupts a live reply and keeps the visible text", async ({
+  page,
+}) => {
+  await page.goto("/chat/code");
+  const prompt = page.getByLabel("Message", { exact: true });
+  await prompt.fill("word ".repeat(100) + "finalword");
+  await prompt.press("Enter");
+  const answer = page.locator('[data-role="assistant"] p');
+  await expect(answer).toContainText("Mock");
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(page.locator("#feedback")).toHaveText("Generation stopped.");
+  const partial = await answer.textContent();
+  expect(partial).not.toContain("finalword");
+  await page.reload();
+  await expect(answer).toHaveText(partial!.trim());
+  await expect(
+    page.getByRole("button", { name: "Send", exact: true }),
+  ).toBeEnabled();
 });
 
 test("a single preset is preselected but installation requires explicit Download", async ({

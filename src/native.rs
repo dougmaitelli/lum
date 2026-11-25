@@ -4,6 +4,15 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
+// The downstream body owns the upstream response: disconnecting the browser
+// drops Loom's stream, rather than leaving a detached generation task running.
+pub fn relay_body(response: reqwest::Response) -> axum::body::Body {
+    axum::body::Body::from_stream(futures_util::stream::try_unfold(
+        response,
+        |mut r| async move { Ok::<_, reqwest::Error>(r.chunk().await?.map(|b| (b, r))) },
+    ))
+}
+
 #[derive(Clone)]
 pub struct Native {
     control: Client,

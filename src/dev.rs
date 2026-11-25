@@ -93,13 +93,22 @@ async fn chat(
     let id = format!("chatcmpl-mock-{}", s.requests);
     if v["stream"] == true {
         let chunk = |delta: Value, finish: Value| json!({"id":id,"object":"chat.completion.chunk","created":0,"model":a,"choices":[{"index":0,"delta":delta,"finish_reason":finish}]});
+        let mut frames: Vec<_> = text
+            .split_inclusive(' ')
+            .map(|word| format!("data: {}\n\n", chunk(json!({"content":word}), Value::Null)))
+            .collect();
+        frames.push(format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            chunk(json!({}), json!("stop"))
+        ));
+        let stream = futures_util::stream::unfold(frames.into_iter(), |mut frames| async move {
+            let frame = frames.next()?;
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            Some((Ok::<_, std::io::Error>(frame), frames))
+        });
         return Ok((
             [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-            format!(
-                "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-                chunk(json!({"role":"assistant","content":text}), Value::Null),
-                chunk(json!({}), json!("stop"))
-            ),
+            axum::body::Body::from_stream(stream),
         )
             .into_response());
     }

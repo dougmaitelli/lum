@@ -5,14 +5,12 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    body::Body,
     extract::{DefaultBodyLimit, Request, State, rejection::JsonRejection},
     http::{StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use futures_util::stream;
 use serde_json::{Value, json};
 
 pub fn router(lib: Library, engine: Native) -> Router {
@@ -165,8 +163,9 @@ async fn chat(State(engine): State<Native>, body: Result<Json<Value>, JsonReject
             "server_error",
         );
     }
-    let chunks = stream::try_unfold(response, |mut r| async move {
-        Ok::<_, reqwest::Error>(r.chunk().await?.map(|b| (b, r)))
-    });
-    ([(header::CONTENT_TYPE, mime)], Body::from_stream(chunks)).into_response()
+    (
+        [(header::CONTENT_TYPE, mime)],
+        crate::native::relay_body(response),
+    )
+        .into_response()
 }

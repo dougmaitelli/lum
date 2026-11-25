@@ -524,9 +524,15 @@ struct Chat {
 async fn chat(
     State(app): State<App>,
     Path(a): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(c): Json<Chat>,
-) -> Ui<Json<serde_json::Value>> {
-    chat_result(&app, &a, c).await.map_err(Into::into)
+) -> Ui<Response> {
+    let streaming = headers
+        .get(header::ACCEPT)
+        .is_some_and(|h| h == "text/event-stream");
+    chat_result(&app, &a, c, streaming)
+        .await
+        .map_err(Into::into)
 }
 fn response_text(reply: &serde_json::Value) -> Result<String> {
     let choice = &reply["choices"][0];
@@ -558,7 +564,7 @@ fn response_text(reply: &serde_json::Value) -> Result<String> {
         choice["finish_reason"].as_str().unwrap_or("not reported")
     );
 }
-async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Value>> {
+async fn chat_result(app: &App, a: &str, c: Chat, streaming: bool) -> Result<Response> {
     app.model(a).await?;
     ensure!(
         app.engine.status().await?.get(a).is_some_and(|l| l.ready()),
@@ -582,6 +588,28 @@ async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Val
         role: "user".into(),
         content: c.prompt,
     });
+    if streaming {
+        let response = app.engine.completion(serde_json::json!({"model":a,"messages":turns,"stream":true,"stream_options":{"include_usage":true}})).await?;
+        ensure!(
+            response.status().is_success(),
+            "Loom {}: {}",
+            response.status(),
+            response.text().await?
+        );
+        ensure!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|h| h.to_str().ok())
+                .is_some_and(|s| s.split(';').next() == Some("text/event-stream")),
+            "Unexpected Loom stream format"
+        );
+        return Ok((
+            [(header::CONTENT_TYPE, "text/event-stream")],
+            crate::native::relay_body(response),
+        )
+            .into_response());
+    }
     let start = Instant::now();
     let reply = app.engine.chat(a, &serde_json::to_value(&turns)?).await?;
     let sec = start.elapsed().as_secs_f64();
@@ -595,7 +623,7 @@ async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Val
         .unwrap_or_else(|| "Token count not reported".into());
     Ok(Json(
         serde_json::json!({"turns":turns,"finish_reason":reply["choices"][0]["finish_reason"].as_str(),"metrics":format!("{sec:.2} s · {usage}")}),
-    ))
+    ).into_response())
 }
 async fn metrics(State(app): State<App>) -> Ui<String> {
     Ok(app.engine.metrics().await?)

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
-  import { reply, type Turn, type Model } from "../api/admin";
+  import type { Turn, Model } from "../api/admin";
+  import { streamReply } from "../api/chat";
   let { model, online }: { model: Model | undefined; online: boolean } = $props();
   function previous(): Turn[] {
     try {
@@ -29,9 +30,11 @@
       /* optional */
     }
   });
-  let disposed = false;
+  let disposed = false,
+    active: AbortController | undefined;
   onDestroy(() => {
     disposed = true;
+    active?.abort();
   });
   onMount(() => {
     void scroll();
@@ -64,21 +67,44 @@
     turns = [...history, { role: "user", content: submitted }];
     feedback = "Waiting for reply…";
     void scroll();
+    const controller = new AbortController(),
+      started = performance.now();
+    active = controller;
+    let answer = "";
     try {
-      const result = await reply(alias, submitted, history);
+      const result = await streamReply(alias, submitted, history, controller.signal, (text) => {
+        if (disposed || controller.signal.aborted) return;
+        answer += text;
+        if (!answer.trimStart()) return;
+        if (turns.length === history.length + 1) turns.push({ role: "assistant", content: answer });
+        else turns[turns.length - 1].content = answer;
+        feedback = "Generating…";
+        void scroll();
+      });
       if (disposed) return;
-      turns = result.turns;
-      store(alias, result.turns);
-      feedback =
-        result.finish_reason === "length"
-          ? `Stopped at the model’s output limit · ${result.metrics}`
-          : result.metrics;
-      void scroll();
+      if (!answer.trim())
+        throw Error(
+          result.reason === "length"
+            ? "Loom reached its generation limit before returning answer text."
+            : "Loom returned no answer text.",
+        );
+      const sec = (performance.now() - started) / 1000;
+      const usage =
+        result.tokens === null
+          ? "Token count not reported"
+          : `${result.tokens} output tokens · ${(result.tokens / sec).toFixed(1)} output tok/s`;
+      feedback = `${result.reason === "length" ? "Stopped at the model’s output limit · " : ""}${sec.toFixed(2)} s · ${usage}`;
+      store(alias, turns);
     } catch (e) {
-      turns = history;
-      prompt = submitted;
-      feedback = String(e);
+      if (disposed) return;
+      if (answer.trim()) store(alias, turns);
+      else {
+        turns = history;
+        prompt = submitted;
+      }
+      feedback = controller.signal.aborted ? "Generation stopped." : String(e);
     } finally {
+      active = undefined;
       busy = false;
     }
   }
@@ -137,7 +163,11 @@
     ></textarea>
     <div class="compose-tools">
       <small id="feedback" role="status">{feedback}</small>
-      <button class="primary" disabled={!online || !model.loaded || busy}>Send</button>
+      {#if busy}
+        <button type="button" onclick={() => active?.abort()}>Stop</button>
+      {:else}
+        <button class="primary" disabled={!online || !model.loaded}>Send</button>
+      {/if}
     </div>
   </form>
 {/if}

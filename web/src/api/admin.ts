@@ -37,11 +37,6 @@ export const post = <T>(path: string, data: unknown) =>
     body: JSON.stringify(data),
   });
 export const snapshot = () => request<Snapshot>("/admin/state");
-export const reply = (alias: string, prompt: string, history: Turn[]) =>
-  post<{ turns: Turn[]; metrics: string; finish_reason: string | null }>(`/admin/chat/${alias}`, {
-    prompt,
-    history,
-  });
 export const saveModelSettings = (alias: string, label: string, context_limit: number | null) =>
   post<void>(`/admin/models/${alias}/settings`, { label, context_limit });
 export const modelAction = (alias: string, op: string) =>

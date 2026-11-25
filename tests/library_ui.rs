@@ -417,6 +417,20 @@ async fn library_forms_chat_restore_and_remove() -> Result<()> {
             .status(),
         StatusCode::BAD_REQUEST
     );
+    let stream = client
+        .post(format!("{url}/admin/chat/check"))
+        .header("Origin", &url)
+        .header("Accept", "text/event-stream")
+        .json(&serde_json::json!({"history":[],"prompt":"a"}))
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    ensure!(
+        stream.contains("[DONE]") && stream.contains("completion_tokens"),
+        "Missing native stream completion or usage: {stream}"
+    );
     check_inference(&client, &url, "check").await?;
     drop(first);
     let (_second, url) = serve(dir).await?;
