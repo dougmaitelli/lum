@@ -1,19 +1,20 @@
+mod presets;
+mod state;
+
 use crate::{
     library::{Library, Model, slug, valid_repo},
     native::Native,
-    view::{self, Turn},
 };
 use anyhow::{Context, Result, bail, ensure};
 use axum::{
-    Form, Router,
+    Extension, Json, Router,
     body::Body,
     extract::{DefaultBodyLimit, Path, State},
     http::{Method, Request, StatusCode, header},
     middleware::{self, Next},
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
-use maud::Markup;
 use reqwest::Client;
 use serde::Deserialize;
 use std::{
@@ -25,27 +26,50 @@ use std::{
 use tokio::{io::AsyncReadExt, process::Command, sync::Mutex};
 
 #[derive(Clone)]
+enum Packages {
+    LoomFetch(PathBuf),
+    #[cfg(feature = "dev-ui")]
+    Fixtures,
+}
+#[derive(Clone)]
 pub struct App {
     pub lib: Library,
     pub engine: Native,
+    packages: Packages,
     http: Client,
-    fetch: PathBuf,
     gate: Arc<Mutex<()>>,
+    worker: Arc<Mutex<()>>,
     log: Arc<Mutex<Vec<u8>>>,
 }
 impl App {
     pub fn new(lib: Library, engine: Native, fetch: PathBuf) -> Result<Self> {
+        Self::with_packages(lib, engine, Packages::LoomFetch(fetch))
+    }
+    fn with_packages(lib: Library, engine: Native, packages: Packages) -> Result<Self> {
+        let http = Client::builder()
+            .user_agent("Lum local model library")
+            .timeout(Duration::from_secs(25))
+            .build()?;
         Ok(Self {
+            http,
             lib,
             engine,
-            fetch,
-            http: Client::builder()
-                .user_agent("Lum local model library")
-                .timeout(Duration::from_secs(25))
-                .build()?,
+            packages,
             gate: Default::default(),
+            worker: Default::default(),
             log: Default::default(),
         })
+    }
+    #[cfg(feature = "dev-ui")]
+    pub fn preview(lib: Library, engine: Native) -> Result<Self> {
+        Self::with_packages(lib, engine, Packages::Fixtures)
+    }
+    fn mocked(&self) -> bool {
+        match &self.packages {
+            Packages::LoomFetch(_) => false,
+            #[cfg(feature = "dev-ui")]
+            Packages::Fixtures => true,
+        }
     }
     fn model(&self, a: &str) -> Result<Model> {
         ensure!(slug(a), "Invalid alias");
@@ -64,16 +88,13 @@ impl From<anyhow::Error> for Problem {
 }
 impl IntoResponse for Problem {
     fn into_response(self) -> Response {
-        (
-            StatusCode::BAD_REQUEST,
-            view::error(&format!("{:#}", self.0)),
-        )
-            .into_response()
+        (StatusCode::BAD_REQUEST, format!("{:#}", self.0)).into_response()
     }
 }
 type Ui<T> = std::result::Result<T, Problem>;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "phase", content = "error", rename_all = "lowercase")]
 pub enum Setup {
     Preparing,
     Failed(String),
@@ -99,39 +120,45 @@ pub fn router(
     retry: Arc<tokio::sync::Notify>,
     runtime: String,
 ) -> Router {
+    let gate = phase.clone();
     Router::new()
-        .route("/", get(home))
-        .route("/catalog", get(catalog))
-        .route("/package/{name}", get(package))
-        .route("/download", post(download))
-        .route("/models/{alias}/{op}", post(change))
-        .route("/remove/{alias}", get(confirm))
-        .route("/play/{alias}", get(play).post(chat))
+        .route("/admin/api", get(api_info))
+        .route("/admin/keys", post(create_key))
+        .route("/admin/keys/{id}/revoke", post(revoke_key))
+        .layer(Extension(listener.inference))
+        .route("/admin/catalog", get(catalog))
+        .route("/admin/presets", get(presets::list))
+        .route("/admin/state", get(state::status))
+        .route("/admin/models/{alias}/{op}", post(model_action))
+        .route("/admin/chat/{alias}", post(chat))
+        .route("/admin/downloads", post(download))
         .route("/metrics", get(metrics))
-        .route("/runtime/retry", post(async || Redirect::to("/")))
-        .route(
-            "/style.css",
-            get(async || {
-                (
-                    [(header::CONTENT_TYPE, "text/css")],
-                    include_str!("../web/style.css"),
-                )
-            }),
-        )
-        .layer(middleware::from_fn(move |req: Request<Body>, next: Next| {
-            let state=phase.borrow().clone(); let name=runtime.clone(); let retry=retry.clone();
-            async move {
-                if matches!(state,Setup::Ready) || req.uri().path()=="/style.css" {return next.run(req).await;}
-                if req.method()==Method::POST && req.uri().path()=="/runtime/retry" && matches!(state,Setup::Failed(_)) {retry.notify_one();return Redirect::to("/").into_response();}
-                let (status,body)=match state {
-                    Setup::Failed(e)=>(StatusCode::SERVICE_UNAVAILABLE, maud::html!{p.warning {(e)} form method="post" action="/runtime/retry" {button {"Retry setup"}}}),
-                    _=>(StatusCode::OK, maud::html!{p {"Preparing the runtime and starting the engine. First installation needs internet access; later starts reuse the verified installation."}}),
-                };
-                let mut response=(status,view::page("Runtime setup",maud::html!{p.kicker {"RUNTIME / SETUP"} h1 {"Runtime setup"} section {h2 {(name)} (body) a href="/" {"Refresh"}}})).into_response();
-                if matches!(status,StatusCode::OK){response.headers_mut().insert("refresh","3; url=/".parse().unwrap());}
-                response
-            }
+        .route_layer(middleware::from_fn(
+            move |req: Request<Body>, next: Next| {
+                let ready = matches!(*gate.borrow(), Setup::Ready);
+                async move {
+                    if ready {
+                        next.run(req).await
+                    } else {
+                        (StatusCode::SERVICE_UNAVAILABLE, "Runtime not ready").into_response()
+                    }
+                }
+            },
+        ))
+        // Bootstrap and static assets remain available even if the SDK installation failed.
+        .route("/admin/runtime", get(runtime_status))
+        .route("/admin/runtime/retry", post(runtime_retry))
+        .layer(Extension(RuntimeStatus {
+            phase,
+            retry,
+            runtime,
         }))
+        .route("/", get(index))
+        .route("/api", get(index))
+        .route("/chat/{alias}", get(index))
+        .route("/remove/{alias}", get(index))
+        .route("/assets/chat.js", get(chat_bundle))
+        .route("/assets/index.css", get(chat_css))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(middleware::from_fn(move |req, next| {
             protect(req, next, listener.clone())
@@ -139,6 +166,35 @@ pub fn router(
         .with_state(app)
 }
 
+#[derive(Clone)]
+struct RuntimeStatus {
+    phase: tokio::sync::watch::Receiver<Setup>,
+    retry: Arc<tokio::sync::Notify>,
+    runtime: String,
+}
+async fn runtime_status(Extension(s): Extension<RuntimeStatus>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({"runtime":s.runtime,"setup":s.phase.borrow().clone()}))
+}
+async fn runtime_retry(Extension(s): Extension<RuntimeStatus>) -> StatusCode {
+    if matches!(*s.phase.borrow(), Setup::Failed(_)) {
+        s.retry.notify_one();
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::CONFLICT
+    }
+}
+async fn chat_bundle() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript")],
+        include_str!(concat!(env!("OUT_DIR"), "/ui/assets/chat.js")),
+    )
+}
+async fn chat_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css")],
+        include_str!(concat!(env!("OUT_DIR"), "/ui/assets/index.css")),
+    )
+}
 async fn protect(req: Request<Body>, next: Next, listener: crate::config::Listener) -> Response {
     let host = req
         .headers()
@@ -186,22 +242,56 @@ async fn protect(req: Request<Body>, next: Next, listener: crate::config::Listen
     }
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_SECURITY_POLICY,"default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'".parse().unwrap());
+    headers.insert(header::CONTENT_SECURITY_POLICY,"default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'".parse().unwrap());
     headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response
 }
-async fn home(State(app): State<App>) -> Ui<Markup> {
-    let models = app.lib.list()?;
-    let live = app.engine.status().await?;
-    let log = app.log.lock().await;
-    Ok(view::library(
-        &models,
-        &live,
-        &String::from_utf8_lossy(&log),
+async fn index() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!(concat!(env!("OUT_DIR"), "/ui/index.html")))
+}
+async fn model_action(
+    State(app): State<App>,
+    Path((a, op)): Path<(String, String)>,
+) -> Ui<StatusCode> {
+    apply(&app, &a, &op).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+fn api_base(addr: std::net::SocketAddr, headers: &axum::http::HeaderMap) -> Result<String> {
+    if !addr.ip().is_unspecified() {
+        return Ok(format!("http://{addr}/v1"));
+    }
+    // The outer admin Host middleware has already checked this authority.
+    let host = headers
+        .get(header::HOST)
+        .context("Missing Host")?
+        .to_str()?
+        .parse::<axum::http::uri::Authority>()?;
+    Ok(format!("http://{}:{}/v1", host.host(), addr.port()))
+}
+async fn api_info(
+    State(app): State<App>,
+    Extension(addr): Extension<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> Ui<Json<serde_json::Value>> {
+    Ok(Json(
+        serde_json::json!({"base":api_base(addr,&headers)?,"keys":app.lib.keys()?}),
     ))
 }
-async fn catalog(State(app): State<App>) -> Ui<Markup> {
+#[derive(Deserialize)]
+struct KeyForm {
+    name: String,
+}
+async fn create_key(State(app): State<App>, Json(f): Json<KeyForm>) -> Ui<Json<serde_json::Value>> {
+    Ok(Json(
+        serde_json::json!({"secret":app.lib.create_key(&f.name)?}),
+    ))
+}
+async fn revoke_key(State(app): State<App>, Path(id): Path<i64>) -> Ui<StatusCode> {
+    app.lib.revoke_key(id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn catalog(State(app): State<App>) -> Ui<Json<Vec<String>>> {
     #[derive(Deserialize)]
     struct Item {
         id: String,
@@ -211,7 +301,7 @@ async fn catalog(State(app): State<App>) -> Ui<Markup> {
         .get("https://huggingface.co/api/models?author=loom-fun&limit=500")
         .send()
         .await
-        .context("Catalog unavailable; you can enter a repository on the library page")?
+        .context("Catalog unavailable; paste a Hugging Face model link instead")?
         .error_for_status()
         .context("Hugging Face catalog request failed")?
         .json::<Vec<Item>>()
@@ -220,51 +310,99 @@ async fn catalog(State(app): State<App>) -> Ui<Markup> {
     let mut ids: Vec<_> = result
         .into_iter()
         .map(|i| i.id)
-        .filter(|s| valid_repo(s))
+        .filter(|s| s.starts_with("loom-fun/") && valid_repo(s))
         .collect();
     ids.sort();
-    Ok(view::catalog(&ids))
-}
-async fn package(Path(name): Path<String>) -> Ui<Markup> {
-    let repo = format!("loom-fun/{name}");
-    if !valid_repo(&repo) {
-        return Err(Problem(anyhow::anyhow!("Invalid repository")));
-    }
-    Ok(view::package(&repo))
-}
-async fn confirm(State(app): State<App>, Path(a): Path<String>) -> Ui<Markup> {
-    app.model(&a)?;
-    Ok(view::confirm(&a))
+    Ok(Json(ids))
 }
 #[derive(Deserialize)]
 struct Download {
+    #[serde(default)]
     alias: String,
     repo: String,
+    #[serde(default)]
     preset: String,
 }
-async fn download(State(app): State<App>, Form(d): Form<Download>) -> Ui<Redirect> {
+fn repository(input: &str) -> Result<String> {
+    let s = input.trim().trim_end_matches('/');
+    if valid_repo(s) {
+        return Ok(s.to_owned());
+    }
+    let path = s
+        .strip_prefix("https://huggingface.co/")
+        .context("Paste an HTTPS huggingface.co model link or owner/repository")?
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('/');
+    let mut parts = path.split('/');
+    let repo = format!(
+        "{}/{}",
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or("")
+    );
+    ensure!(
+        valid_repo(&repo) && matches!(parts.next(), None | Some("tree" | "blob" | "resolve")),
+        "Expected a Hugging Face model repository link"
+    );
+    Ok(repo)
+}
+async fn download(State(app): State<App>, Json(mut d): Json<Download>) -> Ui<StatusCode> {
+    d.repo = repository(&d.repo)?;
+    if d.alias.trim().is_empty() {
+        d.alias = d
+            .repo
+            .split('/')
+            .nth(1)
+            .unwrap()
+            .chars()
+            .take(64)
+            .map(|c| if c == '.' { '-' } else { c })
+            .collect();
+    }
     {
         let _guard = app.gate.lock().await;
         app.lib.reserve(&d.alias, &d.repo, &d.preset)?;
-        app.log.lock().await.clear();
     }
     tokio::spawn(async move {
-        let r = fetch(&app, &d).await;
+        let _worker = app.worker.lock().await;
+        app.log.lock().await.clear();
+        let r = async {
+            app.lib.finish(&d.alias, "downloading", "")?;
+            fetch(&app, &d).await
+        }
+        .await;
         let update = match r {
             Ok(()) => app.lib.finish(&d.alias, "installed", ""),
-            Err(e) => app.lib.finish(&d.alias, "failed", &format!("{e:#}")),
+            Err(e) => {
+                let log = app.log.lock().await;
+                app.lib.finish(
+                    &d.alias,
+                    "failed",
+                    &format!("{e:#}\n{}", String::from_utf8_lossy(&log)),
+                )
+            }
         };
         if let Err(e) = update {
             eprintln!("Could not record download outcome: {e:#}");
         }
     });
-    Ok(Redirect::to("/"))
+    Ok(StatusCode::ACCEPTED)
 }
 async fn fetch(app: &App, d: &Download) -> Result<()> {
     #[derive(Deserialize)]
     struct Revision {
         sha: String,
     }
+    #[cfg(not(feature = "dev-ui"))]
+    let Packages::LoomFetch(bin) = &app.packages;
+    #[cfg(feature = "dev-ui")]
+    let bin = match &app.packages {
+        Packages::LoomFetch(bin) => bin,
+        Packages::Fixtures => {
+            return crate::dev::download(&app.lib, &d.alias, &d.repo, &app.log).await;
+        }
+    };
     let rev = app
         .http
         .get(format!("https://huggingface.co/api/models/{}", d.repo))
@@ -280,7 +418,7 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
     );
     app.lib.revision(&d.alias, &rev)?;
     let staging = app.lib.staging(&d.alias);
-    let mut cmd = Command::new(&app.fetch);
+    let mut cmd = Command::new(bin);
     cmd.arg(format!("huggingface:{}@{rev}", d.repo))
         .args(["--no-input", "--materialize=copy", "--output"])
         .arg(&staging);
@@ -308,7 +446,7 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
     }
     ensure!(
         child.wait().await?.success(),
-        "Fetch failed. Check latest download output, remove the failed entry, and retry."
+        "Loom could not fetch this package. Check the download error and the repository’s Loom compatibility."
     );
     ensure!(
         staging.join("model.json").is_file(),
@@ -316,10 +454,6 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
     );
     tokio::fs::rename(staging, app.lib.package(&d.alias)).await?;
     Ok(())
-}
-async fn change(State(app): State<App>, Path((a, op)): Path<(String, String)>) -> Ui<Redirect> {
-    apply(&app, &a, &op).await?;
-    Ok(Redirect::to("/"))
 }
 async fn apply(app: &App, a: &str, op: &str) -> Result<()> {
     let _guard = app.gate.lock().await;
@@ -344,7 +478,7 @@ async fn apply(app: &App, a: &str, op: &str) -> Result<()> {
         }
         "delete" => {
             ensure!(
-                !registered && !m.desired && m.state != "downloading",
+                !registered && !m.desired && !matches!(m.state.as_str(), "downloading" | "queued"),
                 "Stop the model and wait for retirement or download completion first"
             );
             for path in [app.lib.staging(a), app.lib.package(a)] {
@@ -358,30 +492,35 @@ async fn apply(app: &App, a: &str, op: &str) -> Result<()> {
     }
     Ok(())
 }
-async fn play(State(app): State<App>, Path(a): Path<String>) -> Ui<Markup> {
-    app.model(&a)?;
-    Ok(view::playground(&a, &[], None, 128))
+#[derive(serde::Serialize, Deserialize)]
+struct Turn {
+    role: String,
+    content: String,
 }
 #[derive(Deserialize)]
 struct Chat {
     prompt: String,
-    history: String,
+    history: Vec<Turn>,
     tokens: u32,
 }
-async fn chat(State(app): State<App>, Path(a): Path<String>, Form(c): Form<Chat>) -> Ui<Markup> {
+async fn chat(
+    State(app): State<App>,
+    Path(a): Path<String>,
+    Json(c): Json<Chat>,
+) -> Ui<Json<serde_json::Value>> {
     chat_result(&app, &a, c).await.map_err(Into::into)
 }
-async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Markup> {
+async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Value>> {
     app.model(a)?;
     ensure!(
         app.engine.status().await?.get(a).is_some_and(|l| l.ready()),
-        "Model is not ready"
+        "Model is not loaded"
     );
     ensure!(
         (1..=4096).contains(&c.tokens) && !c.prompt.trim().is_empty() && c.prompt.len() <= 8192,
         "Invalid message or token limit"
     );
-    let mut turns: Vec<Turn> = serde_json::from_str(&c.history)?;
+    let mut turns = c.history;
     ensure!(
         turns.len() < 40
             && turns
@@ -417,13 +556,35 @@ async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Markup> {
             )
         })
         .unwrap_or_else(|| "Token count not reported".into());
-    Ok(view::playground(
-        a,
-        &turns,
-        Some(&format!("{sec:.2} s · {usage}")),
-        c.tokens,
+    Ok(Json(
+        serde_json::json!({"turns":turns,"metrics":format!("{sec:.2} s · {usage}")}),
     ))
 }
 async fn metrics(State(app): State<App>) -> Ui<String> {
     Ok(app.engine.metrics().await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn paste_extracts_only_model_repository_ids() {
+        for link in [
+            "publisher/model",
+            "https://huggingface.co/publisher/model/",
+            "https://huggingface.co/publisher/model/blob/main/model.json?download=true",
+        ] {
+            assert_eq!(repository(link).unwrap(), "publisher/model");
+        }
+        for bad in [
+            "https://example.com/org/repo",
+            "https://huggingface.co.example/org/repo",
+            "https://huggingface.co/datasets/org/data",
+            "../file",
+            "https://huggingface.co/org/%2fsecret",
+            "https://huggingface.co/org/",
+        ] {
+            assert!(repository(bad).is_err(), "{bad}");
+        }
+    }
 }

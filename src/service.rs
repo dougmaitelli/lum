@@ -77,6 +77,10 @@ pub async fn run(foreground: bool) -> Result<()> {
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("Bind Lum listener at {addr}"))?;
+    let api = TcpListener::bind(settings.inference)
+        .await
+        .with_context(|| format!("Bind inference listener at {}", settings.inference))?;
+    settings.inference = api.local_addr()?;
     let addr = listener.local_addr()?;
     settings.port = addr.port();
     let browser_host = settings
@@ -94,6 +98,7 @@ pub async fn run(foreground: bool) -> Result<()> {
     let sdk = Runtime::select(&state)?;
     let socket = runtime.join("engine.sock");
     let engine = Native::new(&socket)?;
+    let inference = crate::inference::router(lib.clone(), engine.clone());
     let app = App::new(lib.clone(), engine.clone(), sdk.bin().join("loom-fetch"))?;
     let (phase, rx) = watch::channel(Setup::Preparing);
     let retry = Arc::new(Notify::new());
@@ -160,7 +165,7 @@ pub async fn run(foreground: bool) -> Result<()> {
         };
         tokio::select! {s=wait=>bail!("loom-serve exited: {}",s?),r=ready=>r}
     };
-    let result = tokio::select! {r=manager=>r,r=axum::serve(listener,router)=>r.context("admin listener"),_=term.recv()=>Ok(()),_=interrupt.recv()=>Ok(())};
+    let result = tokio::select! {r=manager=>r,r=axum::serve(listener,router)=>r.context("admin listener"),r=axum::serve(api,inference)=>r.context("inference listener"),_=term.recv()=>Ok(()),_=interrupt.recv()=>Ok(())};
     if let Some(mut child) = child {
         stop(&mut child).await?;
     }

@@ -1,10 +1,14 @@
 mod config;
+#[cfg(feature = "dev-ui")]
+mod dev;
+mod inference;
+mod keys;
 mod library;
 mod native;
 mod runtime;
 mod service;
+mod telemetry;
 mod ui;
-mod view;
 
 use std::{
     env,
@@ -67,6 +71,14 @@ fn doctor() -> ExitCode {
 fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().skip(1).collect();
     match args.as_slice() {
+        #[cfg(feature = "dev-ui")]
+        [arg] if arg == "dev" || arg == "dev-vite" => match dev::run(arg == "dev-vite") {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("UI preview failed: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
         [cmd, rest @ ..] if cmd == "config" => match config::cli(rest) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

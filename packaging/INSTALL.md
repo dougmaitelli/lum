@@ -50,7 +50,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now lum.service
 ```
 
-For a manual upgrade, repeat the file installation, reload units, and `sudo systemctl restart lum.service` to use the new binary. To install manually **from source**, run `cargo build --locked --release`, then use `target/release/lum` for the binary and the corresponding files under `packaging/` for all other sources in the same commands.
+For a manual upgrade, repeat the file installation, reload units, and `sudo systemctl restart lum.service` to use the new binary. To install manually **from source**, install the [build prerequisites](../docs/development.md), run `npm ci --prefix web` and `cargo build --locked --release`, then use `target/release/lum` for the binary and the corresponding files under `packaging/` for all other sources in the same commands.
 
 ## 3. Verify and configure
 
@@ -83,7 +83,7 @@ sudo lum config api.name ai          # optional: allow http://ai:9390 as well as
 sudo systemctl restart lum.service
 ```
 
-Open `http://<server-ip>:9390/` or `http://ai:9390/` if that name resolves. **There is no web login: anyone who can reach that port can manage models.** Keep loopback (the default) unless the listener is restricted to trusted clients by your firewall or VPN. Host and browser origin checks remain in effect; they are not authentication. Lum does not open your firewall.
+Open `http://<server-ip>:9390/` or `http://ai:9390/` if that name resolves. **There is no web login: anyone who can reach that port can manage models and create or revoke inference keys.** Keep loopback (the default) unless the listener is restricted to trusted clients by your firewall or VPN. Host and browser origin checks remain in effect; they are not authentication. Lum does not open your firewall.
 
 `lum config` prints the effective settings grouped by prefix. For example:
 
@@ -92,9 +92,16 @@ api:
   host: 0.0.0.0
   port: 9390
   name: ai
+inference:
+  host: 127.0.0.1
+  port: 9391
 ```
 
-`lum config api.host` reads one value; `sudo lum config api.port 9494` sets the port. To return to local-only access use `sudo lum config api.host 127.0.0.1` and `sudo lum config api.name -`. Restart after changes. This config controls the **admin HTTP listener**, not an OpenAI-compatible LAN API.
+`lum config api.host` reads one value; `sudo lum config api.port 9494` sets the port. To return to local-only access use `sudo lum config api.host 127.0.0.1` and `sudo lum config api.name -`. Restart after changes. The `api.*` settings control only the **admin HTTP listener**.
+
+The **API** sidebar page gives the inference base URL and full request paths. Load a model, create a named key there, copy it once, and supply it to an OpenAI-compatible client as its API key. SQLite stores only the key digest and metadata. Revoking a key blocks new requests immediately; it does not cancel a request already underway.
+
+To allow LAN clients while keeping administration local, leave `api.host` at loopback and set `sudo lum config inference.host <server-lan-ip>` (or `0.0.0.0` for all IPv4 interfaces). Optionally set `sudo lum config inference.port 9391`, then `sudo systemctl restart lum.service`. When using a wildcard bind, use the server’s reachable IP/hostname rather than `127.0.0.1` in remote clients. Expose only the inference port. HTTP does not encrypt bearer keys: use TLS at a reverse proxy or a secure tunnel on untrusted networks.
 
 For `lum run`, use `lum config --user ...` (no sudo) and restart the foreground process. It reads `$XDG_CONFIG_HOME/lum/config.json` or `~/.config/lum/config.json`. An absolute `LUM_CONFIG_FILE` overrides the path for both the CLI and a process started with that variable. A saved `api.port` takes precedence over `LUM_ADMIN_PORT`; otherwise the environment or default `9390` applies. Existing runtime/device settings in `lum.env` continue to work.
 
@@ -102,10 +109,10 @@ For `lum run`, use `lum config --user ...` (no sudo) and restart the foreground 
 
 On the server, visit `http://127.0.0.1:9390/`. From another computer, run `ssh -N -L 9390:127.0.0.1:9390 user@server`, then open that same URL locally. If you change the listener port, use the same port at both ends. The default loopback interface trusts local users; do not expose it through a public reverse proxy.
 
-1. Open **Catalog**, choose a trusted `loom-fun` text package, and check the model card for device, memory and preset requirements. For example, `loom-fun/unsloth-Qwen3-0.6B-loom` has a `chat` preset. Choose a stable alias and click **Download**. Catalog discovery and downloading need outbound internet access.
-2. Click **Refresh** in the library for download progress, latest output and registration state. Downloading is separate from starting; one download runs at a time. A failed/interrupted download can be removed and retried.
-3. Click **Start model**, refresh until ready, then **Open playground**. The playground holds history in the browser form and returns a complete reply with elapsed time and reported output tokens/s (including prompt time). **Metrics** shows the engine’s raw Prometheus counters. There is no streaming playground or LAN inference listener yet.
-4. **Stop** gracefully retires that alias. After retirement, **Remove…** deletes its local package; it does not clear the SDK cache. Allow disk space for both the cache and installed weights.
+1. In Chat, click **+ Add model**. Search the live `loom-fun` catalog or paste a trusted publisher’s Hugging Face model link. Only Loom-compatible packages can run. Check device, memory and preset requirements on the model card. For example, `loom-fun/unsloth-Qwen3-0.6B-loom` has a `chat` preset. A single preset is selected automatically. If there are several, choose one from the dropdown. Selecting a package or preset does not start a download. Lum derives the local model name from the repository. Search and real downloads require outbound internet access.
+2. Click **Download**. Open **Downloads** to see only active and queued jobs while you chat. One fetch runs at a time. Its bar shows the current file/stage percentage when Loom reports one and is indeterminate otherwise. Finished jobs disappear. If an install fails or is interrupted, open **+ Add model** for the error and remove the failed entry before retrying its alias.
+3. Select an installed model from the sidebar and click **Load model**. When the green dot appears, send a message. Chat keeps history per model in the browser tab and returns a complete reply with elapsed time and reported output tokens/s (including prompt time). `/metrics` serves the raw Prometheus counters. The browser waits for complete replies; API clients may request SSE streaming.
+4. **Unload** gracefully retires that alias. After retirement, **Remove…** deletes its local package; it does not clear the SDK cache. Allow disk space for both the cache and installed weights.
 
 ## Removal
 

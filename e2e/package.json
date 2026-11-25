@@ -1,0 +1,13 @@
+{
+  "name": "lum-browser-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "format:check": "prettier --check *.ts specs package.json"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "prettier": "3.10.1"
+  }
+}

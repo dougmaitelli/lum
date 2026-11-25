@@ -6,7 +6,7 @@ use rusqlite::{Connection, params};
 #[derive(Clone)]
 pub struct Library(pub PathBuf);
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct Model {
     pub alias: String,
     pub repo: String,
@@ -25,8 +25,13 @@ pub fn slug(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
 }
 pub fn valid_repo(s: &str) -> bool {
-    s.strip_prefix("loom-fun/").is_some_and(|r| {
-        !r.is_empty()
+    s.split_once('/').is_some_and(|(owner, r)| {
+        slug(owner)
+            && !matches!(
+                owner,
+                "datasets" | "spaces" | "collections" | "models" | "api"
+            )
+            && !r.is_empty()
             && r.len() <= 96
             && r.as_bytes()[0].is_ascii_alphanumeric()
             && r.bytes()
@@ -38,10 +43,11 @@ impl Library {
         std::fs::create_dir_all(root.join("models"))?;
         let lib = Self(root.to_owned());
         let db = lib.db()?;
-        db.execute_batch("CREATE TABLE IF NOT EXISTS models(alias TEXT PRIMARY KEY, repo TEXT NOT NULL, preset TEXT NOT NULL, revision TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, desired INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT ''); UPDATE models SET state='failed',error='Download interrupted. Remove and download again.' WHERE state='downloading';")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS models(alias TEXT PRIMARY KEY, repo TEXT NOT NULL, preset TEXT NOT NULL, revision TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, desired INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT ''); UPDATE models SET state='failed',error='Download interrupted. Remove and download again.' WHERE state IN ('queued','downloading');")?;
+        db.execute_batch(crate::keys::SCHEMA)?;
         Ok(lib)
     }
-    fn db(&self) -> Result<Connection> {
+    pub(crate) fn db(&self) -> Result<Connection> {
         Ok(Connection::open(self.0.join("library.sqlite"))?)
     }
     pub fn package(&self, a: &str) -> PathBuf {
@@ -71,24 +77,16 @@ impl Library {
     pub fn reserve(&self, a: &str, repo: &str, preset: &str) -> Result<()> {
         ensure!(
             slug(a) && valid_repo(repo) && (preset.is_empty() || slug(preset)),
-            "Use a short alias, a loom-fun repository and a valid preset."
+            "Use a short alias, a Hugging Face model repository and a valid preset."
         );
         let db = self.db()?;
-        ensure!(
-            db.query_row(
-                "SELECT count(*) FROM models WHERE state='downloading'",
-                [],
-                |r| r.get::<_, i64>(0)
-            )? == 0,
-            "A download is already running."
-        );
         ensure!(
             !self.package(a).exists() && !self.staging(a).exists(),
             "Package directory already exists."
         );
         ensure!(
             db.execute(
-                "INSERT OR IGNORE INTO models(alias,repo,preset,state) VALUES(?,?,?,'downloading')",
+                "INSERT OR IGNORE INTO models(alias,repo,preset,state) VALUES(?,?,?,'queued')",
                 params![a, repo, preset]
             )? == 1,
             "Alias already belongs to another installation."
@@ -134,11 +132,12 @@ mod tests {
             assert!(!slug(bad));
         }
         assert!(!valid_repo("loom-fun/../x"));
-        assert!(!valid_repo("other/repo"));
+        assert!(valid_repo("other/repo"));
         lib.reserve("chat", "loom-fun/model", "chat").unwrap();
-        assert!(lib.reserve("other", "loom-fun/model", "").is_err());
+        lib.reserve("other", "loom-fun/model", "").unwrap();
+        lib.finish("other", "downloading", "").unwrap();
         let models = Library::open(tmp.path()).unwrap().list().unwrap();
-        assert_eq!(models[0].state, "failed");
+        assert!(models.iter().all(|m| m.state == "failed"));
         assert!(!models[0].desired);
     }
 }

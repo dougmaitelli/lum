@@ -2,28 +2,27 @@
 
 Lum is a Rust web manager for local hrx-loom chat models. Use one system service to browse `loom-fun` packages on Hugging Face, download a pinned revision, and run multiple models on one private engine. The library distinguishes installed packages from models ready for requests, and restores started aliases after a restart.
 
-![The Lum model library with a ready CPU fixture and a downloaded Qwen package](screenshots/library.png)
+![Lum Chat in dev mode, with downloaded models in the sidebar](screenshots/library.png)
 
-## Open the library
+## Open Chat
 
 1. Follow the [installation guide](packaging/INSTALL.md) for Fedora 44 (RPM), Debian/Ubuntu (DEB), or a manual installation. Download the tested x86-64 packages, tarball and checksums from [GitHub Releases](https://github.com/dougmaitelli/lum/releases/latest). Starting with v0.1.1, Lum installs a private, pinned Loom SDK on first start. The published v0.1.0 packages predate automatic provisioning; use the [v0.1.0 guide](https://github.com/dougmaitelli/lum/blob/v0.1.0/packaging/INSTALL.md) for those binaries.
 2. On the server, open **http://127.0.0.1:9390/**. From a workstation, first run `ssh -N -L 9390:127.0.0.1:9390 user@server`, then open the same URL. The UI has no login and defaults to loopback. Use `lum config` to [enable access on a trusted LAN](packaging/INSTALL.md#configure-the-listener).
-3. Choose a text package in **Catalog**, review its model card, set an alias and preset, and click **Download**. Refresh the library to check progress. Click **Start model** and open the playground once ready.
+3. Click **+ Add model** in the sidebar. Search the live `loom-fun` catalog or paste a Hugging Face model link from a trusted publisher. Choose a preset if prompted. Click **Download**; **Downloads** shows queued and active jobs, with a progress bar for the current transfer. Finished jobs disappear; installation errors are available under **+ Add model**. Choose an installed model from the sidebar and click **Load model**. A green dot marks a loaded model. The bottom status bar shows engine availability, the loaded count, and driver-reported VRAM used / total and percentage. VRAM is system-wide per GPU (not Lum-only); on AMD unified-memory systems it describes the VRAM pool, not all shared RAM. Missing counters are shown as unavailable.
 
-The playground supports multi-turn chat and shows elapsed time, completion tokens and end-to-end output tokens/s when Loom reports usage. Replies appear after generation finishes. **Metrics** exposes native Prometheus text. Streaming chat, a LAN inference API and GPU memory admission controls are not shipped yet.
+Chat keeps a separate conversation per model in the browser tab and shows elapsed time, completion tokens and end-to-end output tokens/s when Loom reports usage. Replies appear after generation finishes. `/metrics` exposes native Prometheus text directly. The chat UI does not yet stream replies or enforce GPU memory admission limits.
+
+## Connect an OpenAI-compatible client
+
+Load a model, then open **API** in the sidebar. Copy the client base URL (normally `http://127.0.0.1:9391/v1`), create a named key, and copy the secret before leaving the page. Set the client’s model to the loaded alias. The separate inference listener supports `GET /v1/models` and `POST /v1/chat/completions` for text messages, including `stream: true`. Both require `Authorization: Bearer <key>`. Revoke a key on the same page to reject subsequent requests; no restart is needed.
+
+To serve another machine, configure [the inference listener](packaging/INSTALL.md#configure-the-listener), not the password-free admin listener. Keys protect inference only. Keep the admin UI restricted: anyone who can reach it can create and revoke keys.
 
 ## Development
 
-Building Lum on Linux requires Rust and a C compiler (bundled SQLite); it does not require Python, Loom, Node or a GPU. `lum doctor` checks managed-install prerequisites without installing anything (or probes both tools under an explicit `LUM_RUNTIME_BIN` override). Running the managed SDK uses system Python 3.12+ with venv/ensurepip (installed as package dependencies) and internet access on first use.
-
-To preview the UI **without a unit, sudo, uv, or a preinstalled Loom**, run from this checkout:
-
 ```sh
-cargo run --locked -- run
+npm ci --prefix web
+cargo dev
 ```
 
-With a binary built from this checkout, the equivalent is `lum run`. Open the printed URL during setup; a failed installation shows a Retry button. The default backend is `amdgpu`; use `LUM_DEVICE=task` for a CPU-only test. No user unit is created and your uv tools are untouched. Use `lum config --user api.port 9494` to change the foreground listener port; `LUM_ADMIN_PORT` remains a fallback if no port is saved. Stop with Ctrl-C. See [architecture and acceptance criteria](ARCHITECTURE.md).
-
-Checks: `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`. With a native 0.3.0 `loom-serve` on `PATH`, run `cargo test --locked -- --include-ignored` to also exercise the two-model lifecycle and the UI start/chat/restore/stop/remove flow on CPU. The test fixture is not part of the production binary.
-
-To build distribution artifacts on x86-64 Linux, run `cargo build --locked --release && packaging/build.sh` with nFPM 2.49.0 on `PATH`. See `dist/` for the packages and SHA-256 manifest.
+Open **http://127.0.0.1:9399/** for Chat with a mock runtime. Svelte, TypeScript, and CSS changes update in the browser without restarting the backend. Node.js is a build/development dependency only. See the [development guide](docs/development.md) for prerequisites, layout, checks and packaging.

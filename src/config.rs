@@ -12,7 +12,7 @@ use std::{
 };
 
 const SYSTEM: &str = "/etc/lum/config.json";
-const USAGE: &str = "Usage: lum config [--user] [api.host|api.port|api.name [VALUE]]\nUse --user for lum run, otherwise settings target lum.service. Use '-' to clear api.name.";
+const USAGE: &str = "Usage: lum config [--user] [api.host|api.port|api.name|inference.host|inference.port [VALUE]]\nUse --user for lum run, otherwise settings target lum.service. Use '-' to clear api.name.";
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -23,9 +23,14 @@ struct Saved {
     port: Option<u16>,
     #[serde(rename = "api.name", skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    #[serde(rename = "inference.host", skip_serializing_if = "Option::is_none")]
+    inference_host: Option<IpAddr>,
+    #[serde(rename = "inference.port", skip_serializing_if = "Option::is_none")]
+    inference_port: Option<u16>,
 }
 #[derive(Clone)]
 pub struct Listener {
+    pub inference: std::net::SocketAddr,
     pub host: IpAddr,
     pub port: u16,
     pub name: Option<String>,
@@ -98,7 +103,19 @@ impl Saved {
                 "api.name must be a hostname without a scheme or port"
             );
         }
+        let inference_port = match self.inference_port {
+            Some(0) => bail!("inference.port must be 1–65535"),
+            Some(p) => p,
+            None => env::var("LUM_INFERENCE_PORT")
+                .unwrap_or_else(|_| "9391".into())
+                .parse()
+                .context("Invalid LUM_INFERENCE_PORT")?,
+        };
         Ok(Listener {
+            inference: std::net::SocketAddr::new(
+                self.inference_host.unwrap_or(Ipv4Addr::LOCALHOST.into()),
+                inference_port,
+            ),
             host,
             port,
             name: self.name.clone(),
@@ -116,22 +133,38 @@ pub fn cli(args: &[OsString]) -> Result<()> {
         return Ok(());
     }
     let path = path(user)?;
-    if args.is_empty() || matches!(args.as_slice(), ["api.host" | "api.port" | "api.name"]) {
+    if args.is_empty()
+        || matches!(
+            args.as_slice(),
+            ["api.host" | "api.port" | "api.name" | "inference.host" | "inference.port"]
+        )
+    {
         let l = Saved::load(&path)?.listener()?;
         let name = l.name.as_deref().unwrap_or("-");
         match args.first().copied() {
             Some("api.host") => println!("{}", l.host),
             Some("api.port") => println!("{}", l.port),
             Some("api.name") => println!("{name}"),
+            Some("inference.host") => println!("{}", l.inference.ip()),
+            Some("inference.port") => println!("{}", l.inference.port()),
             _ => println!(
-                "api:\n  host: {}\n  port: {}\n  name: {name}",
-                l.host, l.port
+                "api:\n  host: {}\n  port: {}\n  name: {name}\ninference:\n  host: {}\n  port: {}",
+                l.host,
+                l.port,
+                l.inference.ip(),
+                l.inference.port()
             ),
         };
         return Ok(());
     }
     ensure!(
-        matches!(args.as_slice(), ["api.host" | "api.port" | "api.name", _]),
+        matches!(
+            args.as_slice(),
+            [
+                "api.host" | "api.port" | "api.name" | "inference.host" | "inference.port",
+                _
+            ]
+        ),
         "{USAGE}"
     );
     let parent = path.parent().context("Invalid config path")?;
@@ -150,6 +183,12 @@ pub fn cli(args: &[OsString]) -> Result<()> {
             )
         }
         ["api.port", v] => saved.port = Some(v.parse().context("api.port must be 1–65535")?),
+        ["inference.host", v] => {
+            saved.inference_host = Some(v.parse().context("inference.host must be an IP address")?)
+        }
+        ["inference.port", v] => {
+            saved.inference_port = Some(v.parse().context("inference.port must be 1–65535")?)
+        }
         ["api.name", v] => saved.name = (*v != "-").then(|| v.to_ascii_lowercase()),
         _ => unreachable!(),
     }

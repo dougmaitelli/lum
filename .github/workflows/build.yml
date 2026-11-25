@@ -7,21 +7,70 @@ permissions:
   contents: read
 concurrency:
   group: linux-build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      app: ${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.app == 'true' }}
+      web: ${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.web == 'true' || steps.filter.outputs.workflow == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.ref_type != 'tag' && github.event_name != 'workflow_dispatch'
+        with:
+          predicate-quantifier: every
+          filters: |
+            app:
+              - '**'
+              - '!docs/**'
+              - '!screenshots/**'
+              - '!README.md'
+              - '!ARCHITECTURE.md'
+            web:
+              - 'web/**'
+            workflow:
+              - '.github/workflows/**'
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web && npm --prefix web run check
   build:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
       - name: Check formatting and lint Rust
         run: |
           rustup default stable
           rustup component add rustfmt clippy
-          cargo fmt --check
+          cargo fmt --all --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
           cargo clippy --locked --all-targets -- -D warnings
       - name: Run Rust tests
-        run: cargo test --locked
+        run: |
+          cargo test --locked
+          cargo test --locked --features dev-ui --test library_ui isolated_preview_workflow
       - name: Build release binary
         run: cargo build --release --locked
       - name: Package binary, RPM and DEB
@@ -60,10 +109,12 @@ jobs:
           systemctl is-enabled lum.service
           systemd-analyze verify lum.service
           for i in $(seq 1 180); do
-            curl -fsS http://127.0.0.1:9390/ -o "$RUNNER_TEMP/library.html" && grep -q 'Model library' "$RUNNER_TEMP/library.html" && break
+            curl -fsS http://127.0.0.1:9390/admin/runtime | jq -e '.setup.phase == "ready"' && break
             sleep 1
           done
-          grep -q 'Model library' "$RUNNER_TEMP/library.html" || { sudo journalctl -u lum --no-pager; exit 1; }
+          curl -fsS http://127.0.0.1:9390/admin/runtime | jq -e '.setup.phase == "ready"' || { sudo journalctl -u lum --no-pager; exit 1; }
+          curl -fsS http://127.0.0.1:9390/assets/chat.js -o /dev/null
+          curl -fsS http://127.0.0.1:9390/admin/state | jq -e '.online == true'
           sudo curl --fail --unix-socket /run/lum/engine.sock http://localhost/readyz
           pid=$(systemctl show -p MainPID --value lum.service)
           sudo nsenter -t "$pid" -m -- findmnt -T /var/lib/lum -n -o OPTIONS | tr ',' '\n' | grep -Fx noexec
@@ -74,10 +125,10 @@ jobs:
           installed=$(sudo stat -c '%i:%y' /opt/lum/runtimes/0.3.0/installed.lock)
           sudo systemctl restart lum.service
           for i in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:9390/ -o "$RUNNER_TEMP/library.html" && grep -q 'Model library' "$RUNNER_TEMP/library.html" && break
+            curl -fsS http://127.0.0.1:9390/admin/runtime | jq -e '.setup.phase == "ready"' && break
             sleep 1
           done
-          grep -q 'Model library' "$RUNNER_TEMP/library.html"
+          curl -fsS http://127.0.0.1:9390/admin/runtime | jq -e '.setup.phase == "ready"'
           sudo curl --fail --unix-socket /run/lum/engine.sock http://localhost/readyz
           test "$installed" = "$(sudo stat -c '%i:%y' /opt/lum/runtimes/0.3.0/installed.lock)"
           # Fixture tests run unprivileged with an independent SDK, not the service's private state.
@@ -92,9 +143,40 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  browser:
+    needs: changes
+    if: needs.changes.outputs.app == 'true' && (github.event_name != 'push' || github.ref_type == 'tag')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            e2e/package-lock.json
+      - run: rustup default stable
+      - run: npm ci --prefix web && npm ci --prefix e2e
+      - working-directory: e2e
+        run: npm run format:check && npx --no-install playwright install --with-deps chromium && npm test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure
+          path: e2e/test-results
+  ci-result:
+    if: always()
+    needs: [changes, web, build, browser]
+    runs-on: ubuntu-24.04
+    steps:
+      - run: exit 1
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      - run: echo 'Selected checks passed.'
+
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [web, build, browser]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:

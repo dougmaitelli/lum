@@ -1,0 +1,77 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: [dependencies]
+    groups:
+      rust-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+      rust-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: [dependencies]
+    groups:
+      frontend-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+      svelte-vite-major:
+        applies-to: version-updates
+        patterns: [svelte, svelte-check, vite, "@sveltejs/vite-plugin-svelte"]
+        update-types: [major]
+      eslint-major:
+        applies-to: version-updates
+        patterns: [eslint, "@eslint/*", "eslint-*", typescript-eslint, "@typescript-eslint/*"]
+        update-types: [major]
+      prettier-major:
+        applies-to: version-updates
+        patterns: [prettier, "prettier-plugin-*"]
+        update-types: [major]
+      frontend-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: [dependencies]
+    groups:
+      browser-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+      playwright-major:
+        applies-to: version-updates
+        patterns: ["@playwright/*", playwright, playwright-core]
+        update-types: [major]
+      browser-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: [dependencies, github-actions]
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]

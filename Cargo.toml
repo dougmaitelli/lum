@@ -3,9 +3,14 @@ name = "lum"
 version = "0.1.4"
 edition = "2024"
 
+[features]
+dev-ui = []
+
 [dependencies]
 axum = "0.8"
-maud = { version = "0.27", features = ["axum"] }
+ring = "0.17"
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false }
 rusqlite = { version = "0.40", features = ["bundled"] }
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

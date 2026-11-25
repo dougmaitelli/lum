@@ -12,6 +12,7 @@ fn config(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_lum"))
         .env_remove("LUM_CONFIG_FILE")
         .env_remove("LUM_ADMIN_PORT")
+        .env_remove("LUM_INFERENCE_PORT")
         .env("XDG_CONFIG_HOME", dir)
         .args(["config", "--user"])
         .args(args)
@@ -48,6 +49,8 @@ fn print_hierarchy_and_validate_before_writing() {
         ["api.port", "65536"],
         ["api.port", "0"],
         ["api.host", "*"],
+        ["inference.port", "0"],
+        ["inference.host", "*"],
         ["api.name", "https://ai"],
         ["unknown", "value"],
     ] {
@@ -60,7 +63,7 @@ fn print_hierarchy_and_validate_before_writing() {
     assert!(!fs::read_to_string(file).unwrap().contains("credential"));
     assert_eq!(
         ok(dir, &[]),
-        "api:\n  host: 0.0.0.0\n  port: 9494\n  name: -\n"
+        "api:\n  host: 0.0.0.0\n  port: 9494\n  name: -\ninference:\n  host: 127.0.0.1\n  port: 9391\n"
     );
     assert!(!config(dir, &["--reset-password"]).status.success());
 }
@@ -84,6 +87,7 @@ async fn saved_lan_bind_needs_no_login_but_checks_host_and_origin() {
             .env("XDG_DATA_HOME", dir.join("data"))
             .env("XDG_RUNTIME_DIR", dir.join("run"))
             .env("LUM_ADMIN_PORT", "0")
+            .env("LUM_INFERENCE_PORT", "0")
             .env("LUM_RUNTIME_BIN", dir.join("no-sdk"))
             .stderr(Stdio::null())
             .spawn()
@@ -91,7 +95,7 @@ async fn saved_lan_bind_needs_no_login_but_checks_host_and_origin() {
     );
     let client = Client::builder().no_proxy().build().unwrap();
     let origin = format!("http://127.0.0.1:{port}");
-    let css = format!("{origin}/style.css");
+    let css = format!("{origin}/assets/index.css");
     let r = timeout(Duration::from_secs(5), async {
         loop {
             if let Ok(r) = client.get(&css).send().await {
@@ -119,7 +123,7 @@ async fn saved_lan_bind_needs_no_login_but_checks_host_and_origin() {
     }
     assert_eq!(
         client
-            .post(format!("{origin}/runtime/retry"))
+            .post(format!("{origin}/admin/runtime/retry"))
             .header(header::ORIGIN, "http://untrusted.test")
             .send()
             .await

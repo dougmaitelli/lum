@@ -33,16 +33,17 @@ async fn serve(dir: &Path) -> Result<(Server, String)> {
             .env("LUM_RUNTIME_BIN", bin)
             .env("LUM_DEVICE", "task")
             .env("LUM_ADMIN_PORT", "0")
+            .env("LUM_INFERENCE_PORT", "0")
             .stderr(Stdio::from(fs::File::create(dir.join("log"))?))
             .spawn()?,
     );
+    address(server, dir, "Lum library: ").await
+}
+async fn address(server: Server, dir: &Path, prefix: &str) -> Result<(Server, String)> {
     let url = timeout(Duration::from_secs(10), async {
         loop {
             let log = fs::read_to_string(dir.join("log")).unwrap();
-            if let Some(url) = log
-                .lines()
-                .find_map(|line| line.strip_prefix("Lum library: "))
-            {
+            if let Some(url) = log.lines().find_map(|line| line.strip_prefix(prefix)) {
                 break url.trim_end_matches('/').to_owned();
             }
             sleep(Duration::from_millis(50)).await;
@@ -52,6 +53,7 @@ async fn serve(dir: &Path) -> Result<(Server, String)> {
     .with_context(|| fs::read_to_string(dir.join("log")).unwrap_or_default())?;
     Ok((server, url))
 }
+#[cfg(feature = "dev-ui")]
 async fn until(client: &Client, url: &str, needle: &str) -> Result<()> {
     timeout(Duration::from_secs(15), async {
         loop {
@@ -64,6 +66,240 @@ async fn until(client: &Client, url: &str, needle: &str) -> Result<()> {
     .await?
 }
 
+async fn until_state(
+    client: &Client,
+    url: &str,
+    predicate: impl Fn(&serde_json::Value) -> bool,
+) -> Result<()> {
+    timeout(Duration::from_secs(15), async {
+        loop {
+            let res = client.get(format!("{url}/admin/state")).send().await?;
+            if let Ok(value) = res.json().await
+                && predicate(&value)
+            {
+                return Ok(());
+            };
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?
+}
+async fn check_inference(client: &Client, admin: &str, alias: &str) -> Result<()> {
+    let issue = || {
+        client
+            .post(format!("{admin}/admin/keys"))
+            .json(&serde_json::json!({"name":"integration"}))
+    };
+    assert_eq!(issue().send().await?.status(), StatusCode::FORBIDDEN);
+    let r = issue()
+        .header("Origin", admin)
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(r.headers()["cache-control"], "no-store");
+    let issued: serde_json::Value = r.json().await?;
+    let token = issued["secret"].as_str().context("issued key")?.to_owned();
+    let info = client
+        .get(format!("{admin}/admin/api"))
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    assert!(!info.contains(&token));
+    let info: serde_json::Value = serde_json::from_str(&info)?;
+    let base = info["base"].as_str().context("advertised endpoint")?;
+    let id = info["keys"][0]["id"].as_i64().context("key id")?;
+    assert!(!base.starts_with(&format!("{admin}/")));
+    let models = format!("{base}/models");
+    let chat = format!("{base}/chat/completions");
+    assert_eq!(
+        client.get(&models).send().await?.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .post(&chat)
+            .bearer_auth("invalid")
+            .send()
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let list: serde_json::Value = client
+        .get(&models)
+        .bearer_auth(&token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(
+        list["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"] == alias)
+    );
+    for streaming in [false, true] {
+        let r=client.post(&chat).bearer_auth(&token).json(&serde_json::json!({"model":alias,"messages":[{"role":"user","content":"a"}],"max_tokens":4,"stream":streaming})).send().await?.error_for_status()?;
+        if streaming {
+            assert!(r.text().await?.contains("[DONE]"));
+        } else {
+            let v: serde_json::Value = r.json().await?;
+            assert!(v["choices"][0]["message"]["content"].is_string());
+        }
+    }
+    for path in [
+        "/api",
+        "/admin/keys",
+        "/admin/api",
+        "/v1/models/register",
+        "/metrics",
+    ] {
+        assert_eq!(
+            client
+                .get(format!("{}{path}", base.strip_suffix("/v1").unwrap()))
+                .bearer_auth(&token)
+                .send()
+                .await?
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    client
+        .post(format!("{admin}/admin/keys/{id}/revoke"))
+        .header("Origin", admin)
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(
+        client
+            .get(&models)
+            .bearer_auth(&token)
+            .send()
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    Ok(())
+}
+#[cfg(feature = "dev-ui")]
+#[tokio::test]
+async fn isolated_preview_workflow() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let tmp = root.path().join("tmp");
+    fs::create_dir(&tmp)?;
+    let forbidden = root.path().join("real-state");
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_lum"))
+            .arg("dev")
+            .env_clear()
+            .env("PATH", "")
+            .env("TMPDIR", &tmp)
+            .env("STATE_DIRECTORY", &forbidden)
+            .env("LUM_DEV_PORT", "0")
+            .env("LUM_DEV_INFERENCE_PORT", "0")
+            .stderr(Stdio::from(fs::File::create(root.path().join("log"))?))
+            .spawn()?,
+    );
+    let (server, url) = address(server, root.path(), "Lum UI preview: ").await?;
+    let client = Client::builder().no_proxy().build()?;
+    until(&client, &url, "/assets/chat.js").await?;
+    assert!(
+        client
+            .get(format!("{url}/assets/chat.js"))
+            .send()
+            .await?
+            .error_for_status()?
+            .content_length()
+            .unwrap_or(0)
+            > 0
+    );
+    let snapshot = client
+        .get(format!("{url}/admin/state"))
+        .send()
+        .await?
+        .text()
+        .await?;
+    let snapshot: serde_json::Value = serde_json::from_str(&snapshot)?;
+    assert_eq!(snapshot["mock"], true);
+    assert_eq!(snapshot["online"], true);
+    assert_eq!(
+        snapshot["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["loaded"] == true)
+            .count(),
+        1
+    );
+    assert_eq!(
+        client.get(format!("{url}/catalog")).send().await?.status(),
+        StatusCode::NOT_FOUND
+    );
+    client
+        .post(format!("{url}/admin/downloads"))
+        .header("Origin", &url)
+        .json(&serde_json::json!({"alias":"test","repo":"https://huggingface.co/another-publisher/example"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    client
+        .post(format!("{url}/admin/downloads"))
+        .header("Origin", &url)
+        .json(&serde_json::json!({"repo":"loom-fun/second"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    until_state(&client, &url, |s| s["progress"]["percent"].is_number()).await?;
+    until_state(&client, &url, |s| {
+        s["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["state"] == "installed")
+    })
+    .await?;
+    let change = |op: &str| {
+        client
+            .post(format!("{url}/admin/models/test/{op}"))
+            .header("Origin", &url)
+    };
+    change("start").send().await?.error_for_status()?;
+    let reply = client
+        .post(format!("{url}/admin/chat/test"))
+        .header("Origin", &url)
+        .json(&serde_json::json!({"prompt":"hello","history":[],"tokens":32}))
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    assert!(reply.contains("Mock reply from test: hello"));
+    until(
+        &client,
+        &format!("{url}/metrics"),
+        "lum_mock_requests_total 1",
+    )
+    .await?;
+    check_inference(&client, &url, "test").await?;
+    change("stop").send().await?.error_for_status()?;
+    change("delete").send().await?.error_for_status()?;
+    assert_eq!(
+        client
+            .post(format!("{url}/admin/models/test/delete"))
+            .header("Origin", &url)
+            .send()
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    drop(server);
+    assert!(!forbidden.exists());
+    assert!(fs::read_dir(tmp)?.next().is_none());
+    Ok(())
+}
 #[tokio::test]
 #[ignore = "requires native hrx-loom 0.3.0 loom-serve on PATH"]
 async fn library_forms_chat_restore_and_remove() -> Result<()> {
@@ -74,9 +310,12 @@ async fn library_forms_chat_restore_and_remove() -> Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let (first, url) = serve(dir).await?;
-    until(&client, &url, "No models yet").await?;
+    until_state(&client, &url, |s| {
+        s["models"].as_array().unwrap().is_empty()
+    })
+    .await?;
     let blocked = client
-        .post(format!("{url}/download"))
+        .post(format!("{url}/admin/downloads"))
         .header("Origin", "http://untrusted.test")
         .send()
         .await?;
@@ -102,18 +341,18 @@ async fn library_forms_chat_restore_and_remove() -> Result<()> {
     Connection::open(dir.join("state/library.sqlite"))?.execute("INSERT INTO models(alias,repo,preset,state) VALUES('check','loom-fun/fixture','check','installed')",[])?;
     assert_eq!(
         client
-            .post(format!("{url}/models/check/start"))
+            .post(format!("{url}/admin/models/check/start"))
             .header("Origin", &url)
             .send()
             .await?
             .status(),
-        StatusCode::SEE_OTHER
+        StatusCode::NO_CONTENT
     );
-    until(&client, &url, "Open playground").await?;
+    until_state(&client, &url, |s| s["models"][0]["loaded"] == true).await?;
     let chat = client
-        .post(format!("{url}/play/check"))
+        .post(format!("{url}/admin/chat/check"))
         .header("Origin", &url)
-        .form(&[("tokens", "4"), ("history", "[]"), ("prompt", "a")])
+        .json(&serde_json::json!({"tokens":4,"history":[],"prompt":"a"}))
         .send()
         .await?
         .error_for_status()?
@@ -125,36 +364,40 @@ async fn library_forms_chat_restore_and_remove() -> Result<()> {
     );
     assert_eq!(
         client
-            .post(format!("{url}/models/check/delete"))
+            .post(format!("{url}/admin/models/check/delete"))
             .header("Origin", &url)
             .send()
             .await?
             .status(),
         StatusCode::BAD_REQUEST
     );
+    check_inference(&client, &url, "check").await?;
     drop(first);
     let (_second, url) = serve(dir).await?;
-    until(&client, &url, "Open playground").await?;
+    until_state(&client, &url, |s| s["models"][0]["loaded"] == true).await?;
     assert_eq!(
         client
-            .post(format!("{url}/models/check/stop"))
+            .post(format!("{url}/admin/models/check/stop"))
             .header("Origin", &url)
             .send()
             .await?
             .status(),
-        StatusCode::SEE_OTHER
+        StatusCode::NO_CONTENT
     );
-    until(&client, &url, "Start model").await?;
+    until_state(&client, &url, |s| s["models"][0]["registered"] == false).await?;
     assert_eq!(
         client
-            .post(format!("{url}/models/check/delete"))
+            .post(format!("{url}/admin/models/check/delete"))
             .header("Origin", &url)
             .send()
             .await?
             .status(),
-        StatusCode::SEE_OTHER
+        StatusCode::NO_CONTENT
     );
-    until(&client, &url, "No models yet").await?;
+    until_state(&client, &url, |s| {
+        s["models"].as_array().unwrap().is_empty()
+    })
+    .await?;
     assert!(!model.exists());
     Ok(())
 }

@@ -30,6 +30,7 @@ async fn foreground_setup_failure_is_recoverable_without_systemd() -> Result<()>
             .env("XDG_DATA_HOME", tmp.path().join("data"))
             .env("XDG_RUNTIME_DIR", tmp.path().join("run"))
             .env("LUM_ADMIN_PORT", "0")
+            .env("LUM_INFERENCE_PORT", "0")
             .env("LUM_RUNTIME_BIN", &bin)
             .stderr(Stdio::from(fs::File::create(&log)?))
             .spawn()?,
@@ -53,16 +54,42 @@ async fn foreground_setup_failure_is_recoverable_without_systemd() -> Result<()>
         .build()?;
     timeout(Duration::from_secs(5), async {
         loop {
-            let r = http.get(&origin).send().await.unwrap();
-            if r.status() == StatusCode::SERVICE_UNAVAILABLE {
-                assert!(r.text().await.unwrap().contains("Retry setup"));
+            let r: serde_json::Value = http
+                .get(format!("{origin}/admin/runtime"))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            if r["setup"]["phase"] == "failed" {
+                assert!(r["setup"]["error"].is_string());
                 break;
             }
             sleep(Duration::from_millis(30)).await;
         }
     })
     .await?;
-    let retry = format!("{origin}/runtime/retry");
+    for path in [
+        "/",
+        "/api",
+        "/remove/test",
+        "/assets/index.css",
+        "/assets/chat.js",
+    ] {
+        http.get(format!("{origin}{path}"))
+            .send()
+            .await?
+            .error_for_status()?;
+    }
+    assert_eq!(
+        http.get(format!("{origin}/admin/api"))
+            .send()
+            .await?
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let retry = format!("{origin}/admin/runtime/retry");
     assert_eq!(
         http.post(&retry)
             .header("Origin", "http://untrusted.test")
@@ -82,7 +109,7 @@ async fn foreground_setup_failure_is_recoverable_without_systemd() -> Result<()>
             .send()
             .await?
             .status(),
-        StatusCode::SEE_OTHER
+        StatusCode::ACCEPTED
     );
     timeout(Duration::from_secs(5), async {
         while child.0.try_wait().unwrap().is_none() {

@@ -26,6 +26,7 @@ impl Native {
         Ok(Self(
             Client::builder()
                 .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
                 .unix_socket(socket.to_owned())
                 .timeout(Duration::from_secs(180))
                 .build()?,
@@ -92,6 +93,14 @@ impl Native {
         )
         .await?;
         Ok(())
+    }
+    pub async fn completion(&self, payload: Value) -> Result<reqwest::Response> {
+        Ok(self
+            .0
+            .post("http://localhost/v1/chat/completions")
+            .json(&payload)
+            .send()
+            .await?)
     }
     pub async fn chat(&self, a: &str, messages: &Value, tokens: u32) -> Result<Value> {
         Ok(self
