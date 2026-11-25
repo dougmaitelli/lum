@@ -50,6 +50,22 @@ impl Library {
         db.execute_batch(crate::keys::SCHEMA)?;
         Ok(lib)
     }
+    /// Run synchronous SQLite work off the HTTP/event-loop thread.
+    pub async fn run<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Self) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let lib = self.clone();
+        tokio::task::spawn_blocking(move || f(&lib)).await?
+    }
+    pub async fn for_alias<T: Send + 'static>(
+        &self,
+        alias: &str,
+        f: impl FnOnce(&Self, &str) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let alias = alias.to_owned();
+        self.run(move |lib| f(lib, &alias)).await
+    }
     pub(crate) fn db(&self) -> Result<Connection> {
         let db = Connection::open(self.0.join("library.sqlite"))?;
         db.pragma_update(None, "foreign_keys", true)?;
@@ -144,6 +160,21 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocked_sqlite_read_leaves_event_loop_available() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let lib = Library::open(tmp.path())?;
+        let writer = lib.db()?;
+        writer.execute_batch("BEGIN EXCLUSIVE")?;
+        // If the read blocks the event loop, this rollback cannot run until
+        // SQLite's busy timeout has already failed the request.
+        let (read, ()) = tokio::join!(lib.run(Library::list), async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            writer.execute_batch("ROLLBACK").unwrap();
+        });
+        assert!(read?.is_empty());
+        Ok(())
+    }
     #[test]
     fn rejects_paths_and_recovers_interrupted_download() {
         let tmp = tempfile::tempdir().unwrap();

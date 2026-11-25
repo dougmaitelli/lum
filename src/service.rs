@@ -150,12 +150,14 @@ pub async fn run(foreground: bool) -> Result<()> {
             .context("Engine did not become ready")?;
             let mut restored = 0;
             for m in lib
-                .list()?
+                .run(Library::list)
+                .await?
                 .into_iter()
                 .filter(|m| m.desired && m.state == "installed")
             {
                 if restored >= max_loaded {
-                    lib.desired(&m.alias, false)?;
+                    lib.for_alias(&m.alias, |lib, a| lib.desired(a, false))
+                        .await?;
                     eprintln!(
                         "Not restoring {}: models.max_loaded = {max_loaded}",
                         m.alias
@@ -166,7 +168,10 @@ pub async fn run(foreground: bool) -> Result<()> {
                     .register(&m.alias, &lib.package(&m.alias), &m.preset, m.context_limit)
                     .await
                 {
-                    lib.finish(&m.alias, "installed", &format!("Restore failed: {e:#}"))?;
+                    lib.for_alias(&m.alias, move |lib, a| {
+                        lib.finish(a, "installed", &format!("Restore failed: {e:#}"))
+                    })
+                    .await?;
                 } else {
                     restored += 1;
                 }

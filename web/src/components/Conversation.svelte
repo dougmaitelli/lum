@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { reply, type Turn, type Model } from "../api/admin";
   let { model, online }: { model: Model | undefined; online: boolean } = $props();
   function previous(): Turn[] {
@@ -22,12 +22,16 @@
     busy = $state(false),
     messages: HTMLElement;
   $effect(() => {
-    if (!model) return;
+    if (!model || busy) return;
     try {
       sessionStorage.setItem("lum.draft." + model.alias, prompt);
     } catch {
       /* optional */
     }
+  });
+  let disposed = false;
+  onDestroy(() => {
+    disposed = true;
   });
   onMount(() => {
     void scroll();
@@ -48,6 +52,13 @@
     const alias = model.alias,
       submitted = prompt,
       history = $state.snapshot(turns);
+    // Keep an unsent copy until the response is committed. Reload restores it
+    // as a draft, never as a new request.
+    try {
+      sessionStorage.setItem("lum.draft." + alias, submitted);
+    } catch {
+      /* optional */
+    }
     busy = true;
     prompt = "";
     turns = [...history, { role: "user", content: submitted }];
@@ -55,9 +66,13 @@
     void scroll();
     try {
       const result = await reply(alias, submitted, history);
+      if (disposed) return;
       turns = result.turns;
       store(alias, result.turns);
-      feedback = result.metrics;
+      feedback =
+        result.finish_reason === "length"
+          ? `Stopped at the model’s output limit · ${result.metrics}`
+          : result.metrics;
       void scroll();
     } catch (e) {
       turns = history;

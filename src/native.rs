@@ -5,7 +5,11 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
 #[derive(Clone)]
-pub struct Native(Client);
+pub struct Native {
+    control: Client,
+    generation: Client,
+    stream: Client,
+}
 #[derive(Deserialize)]
 pub struct Live {
     pub registration: String,
@@ -23,17 +27,25 @@ impl Live {
 }
 impl Native {
     pub fn new(socket: &Path) -> Result<Self> {
-        Ok(Self(
+        Self::with_timeouts(socket, Duration::from_secs(30), Duration::from_secs(180))
+    }
+    fn with_timeouts(socket: &Path, control: Duration, idle: Duration) -> Result<Self> {
+        let client = || {
             Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .unix_socket(socket.to_owned())
-                .timeout(Duration::from_secs(180))
-                .build()?,
-        ))
+                .connect_timeout(Duration::from_secs(5))
+        };
+        // Non-streaming Loom calls send no heartbeat before the completed answer.
+        Ok(Self {
+            control: client().timeout(control).build()?,
+            generation: client().build()?,
+            stream: client().read_timeout(idle).build()?,
+        })
     }
     async fn call(&self, path: &str, payload: Option<Value>) -> Result<reqwest::Response> {
-        let mut req = self.0.request(
+        let mut req = self.control.request(
             if payload.is_some() {
                 Method::POST
             } else {
@@ -105,24 +117,77 @@ impl Native {
         Ok(())
     }
     pub async fn completion(&self, payload: Value) -> Result<reqwest::Response> {
-        Ok(self
-            .0
+        let client = if payload["stream"] == true {
+            &self.stream
+        } else {
+            &self.generation
+        };
+        Ok(client
             .post("http://localhost/v1/chat/completions")
             .json(&payload)
             .send()
             .await?)
     }
     pub async fn chat(&self, a: &str, messages: &Value) -> Result<Value> {
-        Ok(self
-            .call(
-                "/v1/chat/completions",
-                Some(json!({"model":a,"messages":messages,"stream":false})),
-            )
-            .await?
-            .json()
-            .await?)
+        let r = self
+            .completion(json!({"model":a,"messages":messages,"stream":false}))
+            .await?;
+        if !r.status().is_success() {
+            bail!("Loom {}: {}", r.status(), r.text().await?)
+        }
+        Ok(r.json().await?)
     }
     pub async fn metrics(&self) -> Result<String> {
         Ok(self.call("/metrics", None).await?.text().await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        Json, Router,
+        body::{Body, Bytes},
+        response::IntoResponse,
+        routing::post,
+    };
+    #[tokio::test]
+    async fn inference_is_not_limited_by_total_duration() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("server.sock");
+        let socket = tokio::net::UnixListener::bind(&path)?;
+        let route = Router::new().route(
+            "/v1/chat/completions",
+            post(|Json(body): Json<Value>| async move {
+                if body["stream"] == true {
+                    let pieces = futures_util::stream::unfold(0, |n| async move {
+                        if n == 5 {
+                            return None;
+                        }
+                        tokio::time::sleep(Duration::from_millis(60)).await;
+                        Some((
+                            Ok::<_, std::io::Error>(Bytes::from_static(b"data\n")),
+                            n + 1,
+                        ))
+                    });
+                    Body::from_stream(pieces).into_response()
+                } else {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    Json(json!({"ok":true})).into_response()
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(socket, route).await.unwrap();
+        });
+        let n =
+            Native::with_timeouts(&path, Duration::from_millis(40), Duration::from_millis(200))?;
+        assert_eq!(n.chat("model", &json!([])).await?["ok"], true);
+        assert_eq!(
+            n.completion(json!({"stream":true})).await?.text().await?,
+            "data\n".repeat(5)
+        );
+        server.abort();
+        Ok(())
     }
 }

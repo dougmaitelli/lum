@@ -1,3 +1,4 @@
+mod downloads;
 mod presets;
 mod state;
 
@@ -38,7 +39,7 @@ pub struct App {
     packages: Packages,
     http: Client,
     gate: Arc<Mutex<()>>,
-    worker: Arc<Mutex<()>>,
+    downloads: downloads::Queue,
     log: Arc<Mutex<Vec<u8>>>,
 }
 impl App {
@@ -56,7 +57,7 @@ impl App {
             engine,
             packages,
             gate: Default::default(),
-            worker: Default::default(),
+            downloads: Default::default(),
             log: Default::default(),
         })
     }
@@ -71,10 +72,11 @@ impl App {
             Packages::Fixtures => true,
         }
     }
-    fn model(&self, a: &str) -> Result<Model> {
+    async fn model(&self, a: &str) -> Result<Model> {
         ensure!(slug(a), "Invalid alias");
         self.lib
-            .list()?
+            .run(Library::list)
+            .await?
             .into_iter()
             .find(|m| m.alias == a)
             .context("Unknown model alias")
@@ -136,6 +138,7 @@ pub fn router(
         .route("/admin/models/{alias}/settings", post(model_settings))
         .route("/admin/chat/{alias}", post(chat))
         .route("/admin/downloads", post(download))
+        .route("/admin/downloads/{alias}/cancel", post(downloads::cancel))
         .route("/metrics", get(metrics))
         .route_layer(middleware::from_fn(
             move |req: Request<Body>, next: Next| {
@@ -280,7 +283,7 @@ async fn api_info(
     headers: axum::http::HeaderMap,
 ) -> Ui<Json<serde_json::Value>> {
     Ok(Json(
-        serde_json::json!({"base":api_base(addr,&headers)?,"keys":app.lib.keys()?}),
+        serde_json::json!({"base":api_base(addr,&headers)?,"keys":app.lib.run(Library::keys).await?}),
     ))
 }
 #[derive(Deserialize)]
@@ -289,11 +292,11 @@ struct KeyForm {
 }
 async fn create_key(State(app): State<App>, Json(f): Json<KeyForm>) -> Ui<Json<serde_json::Value>> {
     Ok(Json(
-        serde_json::json!({"secret":app.lib.create_key(&f.name)?}),
+        serde_json::json!({"secret":app.lib.run(move |lib| lib.create_key(&f.name)).await?}),
     ))
 }
 async fn revoke_key(State(app): State<App>, Path(id): Path<i64>) -> Ui<StatusCode> {
-    app.lib.revoke_key(id)?;
+    app.lib.run(move |lib| lib.revoke_key(id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 async fn catalog(State(app): State<App>) -> Ui<Json<Vec<String>>> {
@@ -320,7 +323,7 @@ async fn catalog(State(app): State<App>) -> Ui<Json<Vec<String>>> {
     ids.sort();
     Ok(Json(ids))
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Download {
     #[serde(default)]
     alias: String,
@@ -365,36 +368,10 @@ async fn download(State(app): State<App>, Json(mut d): Json<Download>) -> Ui<Sta
             .map(|c| if c == '.' { '-' } else { c })
             .collect();
     }
-    {
-        let _guard = app.gate.lock().await;
-        app.lib.reserve(&d.alias, &d.repo, &d.preset)?;
-    }
-    tokio::spawn(async move {
-        let _worker = app.worker.lock().await;
-        app.log.lock().await.clear();
-        let r = async {
-            app.lib.finish(&d.alias, "downloading", "")?;
-            fetch(&app, &d).await
-        }
-        .await;
-        let update = match r {
-            Ok(()) => app.lib.finish(&d.alias, "installed", ""),
-            Err(e) => {
-                let log = app.log.lock().await;
-                app.lib.finish(
-                    &d.alias,
-                    "failed",
-                    &format!("{e:#}\n{}", String::from_utf8_lossy(&log)),
-                )
-            }
-        };
-        if let Err(e) = update {
-            eprintln!("Could not record download outcome: {e:#}");
-        }
-    });
+    downloads::enqueue(app, d).await?;
     Ok(StatusCode::ACCEPTED)
 }
-async fn fetch(app: &App, d: &Download) -> Result<()> {
+async fn fetch(app: &App, d: &Download) -> Result<String> {
     #[derive(Deserialize)]
     struct Revision {
         sha: String,
@@ -421,7 +398,6 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
         rev.len() == 40 && rev.bytes().all(|c| c.is_ascii_hexdigit()),
         "Expected an immutable Hugging Face revision"
     );
-    app.lib.revision(&d.alias, &rev)?;
     let staging = app.lib.staging(&d.alias);
     let mut cmd = runtime.fetch_command();
     cmd.arg(format!("huggingface:{}@{rev}", d.repo))
@@ -430,13 +406,27 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
     if !d.preset.is_empty() {
         cmd.arg("--preset").arg(&d.preset);
     }
+    run_fetch(cmd, &app.log).await?;
+    ensure!(
+        staging.join("model.json").is_file(),
+        "Fetched package lacks model.json"
+    );
+    Ok(rev)
+}
+async fn run_fetch(mut cmd: tokio::process::Command, log: &Mutex<Vec<u8>>) -> Result<()> {
     let mut child = cmd
+        .process_group(0)
         .kill_on_drop(true)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .context("Launch loom-fetch")?;
+    let mut group = downloads::ProcessGroup(
+        child
+            .id()
+            .and_then(|pid| rustix::process::Pid::from_raw(pid as i32)),
+    );
     let mut stderr = child.stderr.take().unwrap();
     let mut buf = [0; 2048];
     loop {
@@ -444,20 +434,17 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
         if n == 0 {
             break;
         }
-        let mut log = app.log.lock().await;
+        let mut log = log.lock().await;
         log.extend_from_slice(&buf[..n]);
         let excess = log.len().saturating_sub(8192);
         log.drain(..excess);
     }
+    let status = child.wait().await?;
+    group.0 = None;
     ensure!(
-        child.wait().await?.success(),
+        status.success(),
         "Loom could not fetch this package. Check the download error and the repository’s Loom compatibility."
     );
-    ensure!(
-        staging.join("model.json").is_file(),
-        "Fetched package lacks model.json"
-    );
-    tokio::fs::rename(staging, app.lib.package(&d.alias)).await?;
     Ok(())
 }
 #[derive(Deserialize)]
@@ -471,17 +458,20 @@ async fn model_settings(
     Json(settings): Json<ModelSettings>,
 ) -> Ui<StatusCode> {
     let _guard = app.gate.lock().await;
-    let m = app.model(&alias)?;
+    let m = app.model(&alias).await?;
     if m.state != "installed" || m.desired || app.engine.status().await?.contains_key(&alias) {
         return Err(anyhow::anyhow!("Unload the installed model before changing settings").into());
     }
     app.lib
-        .settings(&alias, &settings.label, settings.context_limit)?;
+        .for_alias(&alias, move |lib, a| {
+            lib.settings(a, &settings.label, settings.context_limit)
+        })
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
     let _guard = app.gate.lock().await;
-    let m = app.model(a)?;
+    let m = app.model(a).await?;
     let registrations = app.engine.status().await?;
     let registered = registrations.contains_key(a);
     match op {
@@ -497,13 +487,13 @@ async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
             app.engine
                 .register(a, &app.lib.package(a), &m.preset, m.context_limit)
                 .await?;
-            app.lib.desired(a, true)?;
+            app.lib.for_alias(a, |lib, a| lib.desired(a, true)).await?;
         }
         "stop" => {
             if registered {
                 app.engine.stop(a).await?;
             }
-            app.lib.desired(a, false)?;
+            app.lib.for_alias(a, |lib, a| lib.desired(a, false)).await?;
         }
         "delete" => {
             ensure!(
@@ -515,7 +505,7 @@ async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
                     tokio::fs::remove_dir_all(path).await?;
                 }
             }
-            app.lib.forget(a)?;
+            app.lib.for_alias(a, Library::forget).await?;
         }
         _ => bail!("Unknown action"),
     }
@@ -569,7 +559,7 @@ fn response_text(reply: &serde_json::Value) -> Result<String> {
     );
 }
 async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Value>> {
-    app.model(a)?;
+    app.model(a).await?;
     ensure!(
         app.engine.status().await?.get(a).is_some_and(|l| l.ready()),
         "Model is not loaded"
@@ -601,15 +591,10 @@ async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Val
     });
     let usage = reply["usage"]["completion_tokens"]
         .as_u64()
-        .map(|n| {
-            format!(
-                "{n} output tokens · {:.1} output tok/s (end-to-end)",
-                n as f64 / sec
-            )
-        })
+        .map(|n| format!("{n} output tokens · {:.1} output tok/s", n as f64 / sec))
         .unwrap_or_else(|| "Token count not reported".into());
     Ok(Json(
-        serde_json::json!({"turns":turns,"metrics":format!("{sec:.2} s · {usage}")}),
+        serde_json::json!({"turns":turns,"finish_reason":reply["choices"][0]["finish_reason"].as_str(),"metrics":format!("{sec:.2} s · {usage}")}),
     ))
 }
 async fn metrics(State(app): State<App>) -> Ui<String> {
@@ -651,6 +636,29 @@ mod tests {
             .contains("token limit")
         );
         assert!(extract(json!({"content":null}), "stop").is_err());
+    }
+    #[tokio::test]
+    async fn cancelling_stalled_fetch_stops_its_worker_processes() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.current_dir(dir.path()).args([
+            "-c",
+            "(sleep 0.4; touch escaped) & echo ready >&2; wait; sleep 60",
+        ]);
+        let output = log.clone();
+        let task = tokio::spawn(async move { run_fetch(cmd, &output).await });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while log.lock().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!dir.path().join("escaped").exists());
+        Ok(())
     }
     #[test]
     fn paste_extracts_only_model_repository_ids() {

@@ -238,6 +238,34 @@ async fn isolated_preview_workflow() -> Result<()> {
         client.get(format!("{url}/catalog")).send().await?.status(),
         StatusCode::NOT_FOUND
     );
+    for alias in ["active-cancel", "queued-cancel"] {
+        client
+            .post(format!("{url}/admin/downloads"))
+            .header("Origin", &url)
+            .json(&serde_json::json!({"alias":alias,"repo":"loom-fun/example"}))
+            .send()
+            .await?
+            .error_for_status()?;
+        if alias == "active-cancel" {
+            until_state(&client, &url, |s| s["progress"]["percent"].is_number()).await?;
+        }
+    }
+    for alias in ["queued-cancel", "active-cancel"] {
+        client
+            .post(format!("{url}/admin/downloads/{alias}/cancel"))
+            .header("Origin", &url)
+            .send()
+            .await?
+            .error_for_status()?;
+        until_state(&client, &url, |s| {
+            !s["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["alias"] == alias)
+        })
+        .await?;
+    }
     client
         .post(format!("{url}/admin/downloads"))
         .header("Origin", &url)

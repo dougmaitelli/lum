@@ -38,7 +38,13 @@ async fn authorize(State(lib): State<Library>, req: Request, next: Next) -> Resp
         .and_then(|v| v.split_once(' '))
         .filter(|(kind, _)| kind.eq_ignore_ascii_case("Bearer") && headers.next().is_none())
         .map_or("", |(_, t)| t);
-    let mut response = match lib.permits(token) {
+    let authorized = if token.len() == 47 && token.starts_with("lum_") {
+        let token = token.to_owned();
+        lib.run(move |lib| lib.permits(&token)).await
+    } else {
+        Ok(false)
+    };
+    let mut response = match authorized {
         Ok(true) => next.run(req).await,
         Ok(false) => {
             let mut r = error(

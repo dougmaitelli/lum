@@ -129,6 +129,48 @@ test("submitting clears the composer before the reply and restores it on error",
   await expect(page.locator('[data-role="assistant"]')).toHaveCount(0);
 });
 
+test("reload restores an in-flight prompt without resending and reports a partial answer", async ({
+  page,
+}) => {
+  let requests = 0;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/admin/chat/code", async (route) => {
+    if (++requests === 1) {
+      await pending;
+      await route.abort().catch(() => {});
+      return;
+    }
+    await route.fulfill({
+      json: {
+        turns: [
+          { role: "user", content: "continue" },
+          { role: "assistant", content: "partial text" },
+        ],
+        metrics: "3 tok/s",
+        finish_reason: "length",
+      },
+    });
+  });
+  await page.goto("/chat/code");
+  const prompt = page.getByLabel("Message", { exact: true });
+  await prompt.fill("continue");
+  await prompt.press("Enter");
+  try {
+    await expect.poll(() => requests).toBe(1);
+    await page.reload();
+    await expect(prompt).toHaveValue("continue");
+    expect(requests).toBe(1);
+  } finally {
+    release();
+  }
+  await prompt.press("Enter");
+  await expect(page.getByText("partial text")).toBeVisible();
+  await expect(page.locator("#feedback")).toContainText(
+    "Stopped at the model’s output limit",
+  );
+});
+
 test("a single preset is preselected but installation requires explicit Download", async ({
   page,
 }) => {

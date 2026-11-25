@@ -71,7 +71,8 @@ pub(super) async fn status(State(app): State<App>) -> Ui<Json<Snapshot>> {
     let registrations = status.ok().and_then(Result::ok);
     let models = app
         .lib
-        .list()?
+        .run(crate::library::Library::list)
+        .await?
         .into_iter()
         .map(|mut model| {
             let live = registrations.as_ref().and_then(|l| l.get(&model.alias));

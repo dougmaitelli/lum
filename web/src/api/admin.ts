@@ -38,7 +38,7 @@ export const post = <T>(path: string, data: unknown) =>
   });
 export const snapshot = () => request<Snapshot>("/admin/state");
 export const reply = (alias: string, prompt: string, history: Turn[]) =>
-  post<{ turns: Turn[]; metrics: string }>(`/admin/chat/${alias}`, {
+  post<{ turns: Turn[]; metrics: string; finish_reason: string | null }>(`/admin/chat/${alias}`, {
     prompt,
     history,
   });

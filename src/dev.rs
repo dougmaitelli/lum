@@ -21,12 +21,10 @@ use tokio::{
 };
 
 const REV: &str = "1a2b3c4d5e6f0000000000000000000000000000";
-async fn install(lib: &Library, a: &str) -> Result<()> {
-    lib.revision(a, REV)?;
+async fn stage(lib: &Library, a: &str) -> Result<()> {
     let staging = lib.staging(a);
     tokio::fs::create_dir(&staging).await?;
     tokio::fs::write(staging.join("model.json"), b"{\"mock\":true}\n").await?;
-    tokio::fs::rename(staging, lib.package(a)).await?;
     Ok(())
 }
 #[derive(Default)]
@@ -126,7 +124,9 @@ pub async fn run(hot_reload: bool) -> Result<()> {
         ("instruct", "loom-fun/dev-instruct-1b"),
     ] {
         lib.reserve(a, r, "chat")?;
-        install(&lib, a).await?;
+        stage(&lib, a).await?;
+        tokio::fs::rename(lib.staging(a), lib.package(a)).await?;
+        lib.revision(a, REV)?;
         lib.finish(a, "installed", "")?;
     }
     lib.desired("code", true)?;
@@ -192,7 +192,12 @@ pub async fn run(hot_reload: bool) -> Result<()> {
     tokio::select! { s=wait_vite=>anyhow::bail!("Vite exited: {}",s?),r=axum::serve(private,mocked)=>r?,r=axum::serve(api,inference)=>r?, r=axum::serve(listener,router.into_make_service_with_connect_info::<ui::Destination>())=>r?,_=term.recv()=>(),_=interrupt.recv()=>() }
     Ok(())
 }
-pub async fn download(lib: &Library, alias: &str, repo: &str, log: &Mutex<Vec<u8>>) -> Result<()> {
+pub async fn download(
+    lib: &Library,
+    alias: &str,
+    repo: &str,
+    log: &Mutex<Vec<u8>>,
+) -> Result<String> {
     *log.lock().await = format!("Simulating download of {repo} (no network access)").into_bytes();
     for step in 0..10 {
         log.lock().await.extend_from_slice(
@@ -204,9 +209,9 @@ pub async fn download(lib: &Library, alias: &str, repo: &str, log: &Mutex<Vec<u8
         );
         tokio::time::sleep(Duration::from_millis(350)).await;
     }
-    install(lib, alias).await?;
+    stage(lib, alias).await?;
     log.lock()
         .await
         .extend_from_slice(b"\nFixture installed. No weights downloaded.");
-    Ok(())
+    Ok(REV.into())
 }
