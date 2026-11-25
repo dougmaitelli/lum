@@ -66,7 +66,19 @@ pub(super) struct Snapshot {
 pub(super) async fn status(State(app): State<App>) -> Ui<Json<Snapshot>> {
     let (status, gpus) = tokio::join!(
         tokio::time::timeout(Duration::from_secs(3), app.engine.status()),
-        tokio::task::spawn_blocking(|| crate::telemetry::read_vram(Path::new("/sys/class/drm")))
+        async {
+            #[cfg(feature = "dev-ui")]
+            if app.mocked() {
+                return vec![crate::telemetry::Vram {
+                    card: "mock0".into(),
+                    used: 12 << 30,
+                    total: 64 << 30,
+                }];
+            }
+            tokio::task::spawn_blocking(|| crate::telemetry::read_vram(Path::new("/sys/class/drm")))
+                .await
+                .unwrap_or_default()
+        }
     );
     let registrations = status.ok().and_then(Result::ok);
     let models = app
@@ -90,7 +102,6 @@ pub(super) async fn status(State(app): State<App>) -> Ui<Json<Snapshot>> {
         })
         .collect();
     let vram = gpus
-        .unwrap_or_default()
         .into_iter()
         .map(|gpu| Gpu {
             summary: gpu.summary(),

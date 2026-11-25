@@ -4,6 +4,9 @@ test("chat, add a model in the background, switch models and manage a key", asyn
 }) => {
   await page.goto("/");
   await expect(page.getByRole("img", { name: "Loaded" })).toHaveCount(1);
+  await expect(page.getByTitle("Simulated device memory")).toHaveText(
+    "VRAM 12.0 / 64.0 GiB (19%)",
+  );
   for (const row of await page.locator(".model-row").all()) {
     for (const button of await row.locator(".row-actions").all()) {
       const action = await button.boundingBox();

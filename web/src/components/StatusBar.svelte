@@ -17,7 +17,11 @@
       </span>
     {/if}
     {#each data.vram as gpu (gpu.card)}
-      <span title="Driver-reported device memory, all processes">
+      <span
+        title={data.mock
+          ? "Simulated device memory"
+          : "Driver-reported device memory, all processes"}
+      >
         VRAM {data.vram.length > 1 ? gpu.card : ""}
         {gpu.summary}
       </span>
