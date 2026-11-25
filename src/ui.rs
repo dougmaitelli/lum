@@ -80,9 +80,21 @@ pub enum Setup {
     Ready,
 }
 
+/// Validate IP Host headers against the connection's actual destination even
+/// when listening on a wildcard. Do not trust forwarded or client-provided IPs.
+#[derive(Clone, Copy)]
+pub struct Destination(Option<std::net::IpAddr>);
+impl
+    axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, tokio::net::TcpListener>>
+    for Destination
+{
+    fn connect_info(stream: axum::serve::IncomingStream<'_, tokio::net::TcpListener>) -> Self {
+        Self(stream.io().local_addr().ok().map(|s| s.ip()))
+    }
+}
 pub fn router(
     app: App,
-    port: u16,
+    listener: crate::config::Listener,
     phase: tokio::sync::watch::Receiver<Setup>,
     retry: Arc<tokio::sync::Notify>,
     runtime: String,
@@ -122,27 +134,68 @@ pub fn router(
         }))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(middleware::from_fn(move |req, next| {
-            protect(req, next, port)
+            protect(req, next, listener.clone())
         }))
         .with_state(app)
 }
 
-async fn protect(req: Request<Body>, next: Next, port: u16) -> Response {
+async fn protect(req: Request<Body>, next: Next, listener: crate::config::Listener) -> Response {
     let host = req
         .headers()
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    let local = host == format!("localhost:{port}") || host == format!("127.0.0.1:{port}");
+    let dest = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<Destination>>()
+        .and_then(|v| v.0.0);
+    let allowed = host
+        .parse::<axum::http::uri::Authority>()
+        .ok()
+        .is_some_and(|a| {
+            let name = a.host();
+            if a.as_str() != format!("{name}:{}", listener.port)
+                && !(listener.port == 80 && a.as_str() == name)
+            {
+                return false;
+            }
+            let ip = name
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .ok();
+            (ip.is_some() && ip == dest)
+                || (name.eq_ignore_ascii_case("localhost")
+                    && dest.is_some_and(|ip| ip.is_loopback()))
+                || listener
+                    .name
+                    .as_ref()
+                    .is_some_and(|n| name.eq_ignore_ascii_case(n))
+        });
     let read_only = matches!(*req.method(), Method::GET | Method::HEAD);
     let origin = req
         .headers()
         .get(header::ORIGIN)
         .and_then(|h| h.to_str().ok());
-    if !local || (!read_only && origin != Some(format!("http://{host}").as_str())) {
+    if !allowed || (!read_only && origin != Some(format!("http://{host}").as_str())) {
         return (
             StatusCode::FORBIDDEN,
-            "Use the loopback admin URL and same-origin form.",
+            "Use the server IP or configured api.name, and a same-origin form.",
+        )
+            .into_response();
+    }
+    if !listener.authenticated(
+        req.headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok()),
+    ) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [
+                (header::WWW_AUTHENTICATE, "Basic realm=\"Lum admin\""),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            "Admin credentials required",
         )
             .into_response();
     }

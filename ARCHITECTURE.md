@@ -16,7 +16,7 @@ Use one Cargo package and one managed Linux service, not one service per model. 
 
 One engine reduces scheduling and memory contention between independent runtimes on the shared GPU. The tradeoff is a shared failure domain: an engine crash ends all in-flight requests. The supervisor must report that failure, restart with bounded backoff, and restore desired registrations; never silently replay a chat request.
 
-**Current deployment stage:** A single boot-enabled unit runs the Rust manager, which owns a loopback Axum UI, SQLite library and private `loom-serve` child. Start/Stop persist desired registrations; startup restores selected aliases. An unexpected child exit fails the manager so systemd can restart the unit with rate limiting. The separate LAN listener and streaming playground in the target architecture are not implemented yet. See [installation and service operations](packaging/INSTALL.md).
+**Current deployment stage:** A single boot-enabled unit runs the Rust manager, which owns a loopback-by-default Axum UI (explicit non-loopback binding requires admin authentication), SQLite library and private `loom-serve` child. Start/Stop persist desired registrations; startup restores selected aliases. An unexpected child exit fails the manager so systemd can restart the unit with rate limiting. The separate LAN listener and streaming playground in the target architecture are not implemented yet. See [installation and service operations](packaging/INSTALL.md).
 
 ## State ownership
 

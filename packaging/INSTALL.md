@@ -2,7 +2,7 @@
 
 Use **the RPM on Fedora 44** and **the DEB on Ubuntu 24.04+ or Debian 13**. The third option is a manual tarball. These x86-64 builds are for systemd hosts with glibc 2.39 or newer. Choose one installation method; do not overlay a manual install on package-managed files.
 
-The service starts the Lum web library on **127.0.0.1:9390** and one private Loom engine on a Unix socket. No LAN API or public listener is enabled. Lum runs as an unprivileged service account; neither login nor `loginctl enable-linger` is needed for boot startup.
+The service starts the Lum web library on **127.0.0.1:9390** and one private Loom engine on a Unix socket. No LAN API or public listener is enabled by default. Lum runs as an unprivileged service account; neither login nor `loginctl enable-linger` is needed for boot startup.
 
 ## 1. Runtime setup is automatic
 
@@ -72,9 +72,25 @@ SupplementaryGroups=
 
 If the unit reports an unmet condition for `/opt/lum`, inspect `systemctl cat lum.service`: the old unit or a local override is still loaded. The updated unit does not have a Loom-path prerequisite. For runtime setup errors open the UI or read `journalctl -u lum -b`; after fixing Python, disk space or network access use **Retry setup**. For GPU errors inspect service logs and device permissions; on Fedora also check audit logs for SELinux denials instead of disabling SELinux. After correcting repeated startup failures, run `sudo systemctl reset-failed lum && sudo systemctl start lum`.
 
+## Configure the listener
+
+Starting with v0.1.3, the system service reads `/etc/lum/config.json` on startup. Example for a server named `ai`:
+
+```sh
+sudo lum config api.host 0.0.0.0    # generates an admin password on first LAN setup
+sudo lum config api.name ai          # optional: allow http://ai:9390 as well as the server IP
+sudo systemctl restart lum.service
+```
+
+Save the generated password. Open `http://<server-ip>:9390/` or `http://ai:9390/` if that name resolves. `0.0.0.0` is the bind address, not the browser address. Use username **lum**. Non-loopback binding requires authentication on every route, including setup, metrics and requests from localhost. Basic authentication over HTTP does **not** encrypt credentials or prompts: restrict access to trusted clients on a private network or VPN; use the default SSH tunnel on untrusted networks. Lum does not open your firewall.
+
+`lum config` lists settings; `lum config api.host` reads one; `sudo lum config api.port 9494` sets the port. To rotate a lost/exposed password use `sudo lum config --reset-password`. To return to local-only access use `sudo lum config api.host 127.0.0.1` and `sudo lum config api.name -`. Restart after changes. The password is shown only when generated, never by a config read. This config controls the **admin HTTP listener**, not an OpenAI-compatible LAN API.
+
+For `lum run`, use `lum config --user ...` (no sudo) and restart the foreground process. It reads `$XDG_CONFIG_HOME/lum/config.json` or `~/.config/lum/config.json`. An absolute `LUM_CONFIG_FILE` overrides the path for both the CLI and a process started with that variable. A saved `api.port` takes precedence over `LUM_ADMIN_PORT`; otherwise the environment or default `9390` applies. Existing runtime/device settings in `lum.env` continue to work.
+
 ## Open the web UI
 
-On the server, visit `http://127.0.0.1:9390/`. From another computer, run `ssh -N -L 9390:127.0.0.1:9390 user@server`, then open that same URL locally. If you change `LUM_ADMIN_PORT`, use the same port at both ends. The admin interface trusts local users; do not expose it through a public reverse proxy.
+On the server, visit `http://127.0.0.1:9390/`. From another computer, run `ssh -N -L 9390:127.0.0.1:9390 user@server`, then open that same URL locally. If you change the listener port, use the same port at both ends. The default loopback interface trusts local users; do not expose it through a public reverse proxy.
 
 1. Open **Catalog**, choose a trusted `loom-fun` text package, and check the model card for device, memory and preset requirements. For example, `loom-fun/unsloth-Qwen3-0.6B-loom` has a `chat` preset. Choose a stable alias and click **Download**. Catalog discovery and downloading need outbound internet access.
 2. Click **Refresh** in the library for download progress, latest output and registration state. Downloading is separate from starting; one download runs at a time. A failed/interrupted download can be removed and retried.

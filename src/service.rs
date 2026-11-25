@@ -72,14 +72,24 @@ pub async fn run(foreground: bool) -> Result<()> {
     let (runtime, state) = directories(foreground)?;
     private_dir(&state)?;
     let _lock = instance_lock(&state)?;
-    let port: u16 = env::var("LUM_ADMIN_PORT")
-        .unwrap_or_else(|_| "9390".into())
-        .parse()
-        .context("Invalid LUM_ADMIN_PORT")?;
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+    let mut settings = crate::config::Listener::load(foreground)?;
+    let addr = std::net::SocketAddr::new(settings.host, settings.port);
+    let listener = TcpListener::bind(addr)
         .await
-        .context("bind loopback admin listener; set LUM_ADMIN_PORT to use another port")?;
-    let port = listener.local_addr()?.port();
+        .with_context(|| format!("Bind Lum listener at {addr}"))?;
+    let addr = listener.local_addr()?;
+    settings.port = addr.port();
+    let browser_host = settings
+        .name
+        .clone()
+        .unwrap_or_else(|| match settings.host {
+            std::net::IpAddr::V4(ip) if ip.is_unspecified() => "127.0.0.1".into(),
+            std::net::IpAddr::V6(ip) if ip.is_unspecified() => "[::1]".into(),
+            std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+            ip => ip.to_string(),
+        });
+    let url = format!("http://{browser_host}:{}/", settings.port);
+    eprintln!("Lum listener bound to {addr}");
     let lib = Library::open(&state)?;
     let sdk = Runtime::select(&state)?;
     let socket = runtime.join("engine.sock");
@@ -87,10 +97,11 @@ pub async fn run(foreground: bool) -> Result<()> {
     let app = App::new(lib.clone(), engine.clone(), sdk.bin().join("loom-fetch"))?;
     let (phase, rx) = watch::channel(Setup::Preparing);
     let retry = Arc::new(Notify::new());
-    let router = ui::router(app, port, rx, retry.clone(), sdk.description());
+    let router = ui::router(app, settings, rx, retry.clone(), sdk.description())
+        .into_make_service_with_connect_info::<ui::Destination>();
     let mut term = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
-    eprintln!("Lum setup: http://127.0.0.1:{port}/");
+    eprintln!("Lum setup: {url}");
     let mut child = None;
     let manager = async {
         loop {
@@ -144,7 +155,7 @@ pub async fn run(foreground: bool) -> Result<()> {
                 }
             }
             phase.send_replace(Setup::Ready);
-            eprintln!("Lum library: http://127.0.0.1:{port}/");
+            eprintln!("Lum library: {url}");
             std::future::pending::<Result<()>>().await
         };
         tokio::select! {s=wait=>bail!("loom-serve exited: {}",s?),r=ready=>r}

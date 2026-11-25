@@ -1,3 +1,4 @@
+mod config;
 mod library;
 mod native;
 mod runtime;
@@ -10,7 +11,7 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-const HELP: &str = "Usage:\n  lum run       Start Lum in the foreground with its own managed runtime\n  lum serve     Start the systemd-managed instance\n  lum doctor    Check managed-runtime prerequisites or an explicit external override";
+const HELP: &str = "Usage:\n  lum run       Start Lum in the foreground with its own managed runtime\n  lum serve     Start the systemd-managed instance\n  lum config [--user] [KEY [VALUE]]    Read or change listener settings\n  lum doctor    Check managed-runtime prerequisites or an explicit external override";
 
 fn doctor() -> ExitCode {
     let Some(bin) = env::var_os("LUM_RUNTIME_BIN").map(std::path::PathBuf::from) else {
@@ -66,6 +67,13 @@ fn doctor() -> ExitCode {
 fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().skip(1).collect();
     match args.as_slice() {
+        [cmd, rest @ ..] if cmd == "config" => match config::cli(rest) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("Config: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
         [arg] if arg == "doctor" => doctor(),
         [arg] if arg == "serve" || arg == "run" => match service::run(arg == "run") {
             Ok(()) => ExitCode::SUCCESS,
