@@ -74,17 +74,27 @@ If the unit reports an unmet condition for `/opt/lum`, inspect `systemctl cat lu
 
 ## Configure the listener
 
-Starting with v0.1.3, the system service reads `/etc/lum/config.json` on startup. Example for a server named `ai`:
+The system service reads `/etc/lum/config.json` on startup. Read settings as a normal user; use `sudo` to change them and restart the service. For a server named `ai`:
 
 ```sh
-sudo lum config api.host 0.0.0.0    # generates an admin password on first LAN setup
+lum config
+sudo lum config api.host 0.0.0.0
 sudo lum config api.name ai          # optional: allow http://ai:9390 as well as the server IP
 sudo systemctl restart lum.service
 ```
 
-Save the generated password. Open `http://<server-ip>:9390/` or `http://ai:9390/` if that name resolves. `0.0.0.0` is the bind address, not the browser address. Use username **lum**. Non-loopback binding requires authentication on every route, including setup, metrics and requests from localhost. Basic authentication over HTTP does **not** encrypt credentials or prompts: restrict access to trusted clients on a private network or VPN; use the default SSH tunnel on untrusted networks. Lum does not open your firewall.
+Open `http://<server-ip>:9390/` or `http://ai:9390/` if that name resolves. **There is no web login: anyone who can reach that port can manage models.** Keep loopback (the default) unless the listener is restricted to trusted clients by your firewall or VPN. Host and browser origin checks remain in effect; they are not authentication. Lum does not open your firewall.
 
-`lum config` lists settings; `lum config api.host` reads one; `sudo lum config api.port 9494` sets the port. To rotate a lost/exposed password use `sudo lum config --reset-password`. To return to local-only access use `sudo lum config api.host 127.0.0.1` and `sudo lum config api.name -`. Restart after changes. The password is shown only when generated, never by a config read. This config controls the **admin HTTP listener**, not an OpenAI-compatible LAN API.
+`lum config` prints the effective settings grouped by prefix. For example:
+
+```text
+api:
+  host: 0.0.0.0
+  port: 9390
+  name: ai
+```
+
+`lum config api.host` reads one value; `sudo lum config api.port 9494` sets the port. To return to local-only access use `sudo lum config api.host 127.0.0.1` and `sudo lum config api.name -`. Restart after changes. This config controls the **admin HTTP listener**, not an OpenAI-compatible LAN API.
 
 For `lum run`, use `lum config --user ...` (no sudo) and restart the foreground process. It reads `$XDG_CONFIG_HOME/lum/config.json` or `~/.config/lum/config.json`. An absolute `LUM_CONFIG_FILE` overrides the path for both the CLI and a process started with that variable. A saved `api.port` takes precedence over `LUM_ADMIN_PORT`; otherwise the environment or default `9390` applies. Existing runtime/device settings in `lum.env` continue to work.
 

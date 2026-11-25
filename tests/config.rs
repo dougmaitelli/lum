@@ -36,7 +36,7 @@ impl Drop for Server {
 }
 
 #[test]
-fn validate_before_writing_and_keep_secrets_out_of_queries() {
+fn print_hierarchy_and_validate_before_writing() {
     let dir = tempfile::tempdir().unwrap();
     let dir = dir.path();
     assert_eq!(ok(dir, &["api.host"]).trim(), "127.0.0.1");
@@ -55,25 +55,20 @@ fn validate_before_writing_and_keep_secrets_out_of_queries() {
         assert_eq!(fs::read(&file).unwrap(), original);
     }
     assert_eq!(ok(dir, &["api.port"]).trim(), "9494");
-    let pass = ok(dir, &["api.host", "0.0.0.0"]);
-    let pass = pass
-        .lines()
-        .find_map(|l| l.strip_prefix("Admin password (shown once): "))
-        .unwrap();
-    assert!(!fs::read_to_string(file).unwrap().contains(pass));
-    assert!(!ok(dir, &[]).contains(pass));
-    assert!(!ok(dir, &["api.host", "0.0.0.0"]).contains("password"));
-    assert!(!ok(dir, &["--reset-password"]).contains(pass));
+    let out = ok(dir, &["api.host", "0.0.0.0"]);
+    assert!(!out.contains("password"));
+    assert!(!fs::read_to_string(file).unwrap().contains("credential"));
+    assert_eq!(
+        ok(dir, &[]),
+        "api:\n  host: 0.0.0.0\n  port: 9494\n  name: -\n"
+    );
+    assert!(!config(dir, &["--reset-password"]).status.success());
 }
 #[tokio::test]
-async fn saved_lan_bind_enforces_auth_host_and_origin() {
+async fn saved_lan_bind_needs_no_login_but_checks_host_and_origin() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
-    let pass = ok(dir, &["api.host", "0.0.0.0"]);
-    let pass = pass
-        .lines()
-        .find_map(|l| l.strip_prefix("Admin password (shown once): "))
-        .unwrap();
+    ok(dir, &["api.host", "0.0.0.0"]);
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -107,24 +102,13 @@ async fn saved_lan_bind_enforces_auth_host_and_origin() {
     })
     .await
     .unwrap();
-    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
-    assert!(r.headers().contains_key(header::WWW_AUTHENTICATE));
-    assert_eq!(
-        client
-            .get(&css)
-            .basic_auth("lum", Some("incorrect"))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
+    assert_eq!(r.status(), StatusCode::OK);
+    assert!(!r.headers().contains_key(header::WWW_AUTHENTICATE));
     for (host, status) in [("ai", 200), ("127.0.0.1", 200), ("untrusted.test", 403)] {
         assert_eq!(
             client
                 .get(&css)
                 .header("Host", format!("{host}:{port}"))
-                .basic_auth("lum", Some(pass))
                 .send()
                 .await
                 .unwrap()
@@ -137,7 +121,6 @@ async fn saved_lan_bind_enforces_auth_host_and_origin() {
         client
             .post(format!("{origin}/runtime/retry"))
             .header(header::ORIGIN, "http://untrusted.test")
-            .basic_auth("lum", Some(pass))
             .send()
             .await
             .unwrap()

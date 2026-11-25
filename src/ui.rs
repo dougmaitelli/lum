@@ -184,21 +184,6 @@ async fn protect(req: Request<Body>, next: Next, listener: crate::config::Listen
         )
             .into_response();
     }
-    if !listener.authenticated(
-        req.headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|h| h.to_str().ok()),
-    ) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [
-                (header::WWW_AUTHENTICATE, "Basic realm=\"Lum admin\""),
-                (header::CACHE_CONTROL, "no-store"),
-            ],
-            "Admin credentials required",
-        )
-            .into_response();
-    }
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_SECURITY_POLICY,"default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'".parse().unwrap());
