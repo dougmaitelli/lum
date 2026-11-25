@@ -137,7 +137,7 @@ jobs:
           PATH="$RUNNER_TEMP/fixtures/bin:$PATH" cargo test --locked -- --ignored
           sudo apt-get purge -y lum
           test ! -e /run/lum/engine.sock
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: lum-linux-x86_64
           path: dist/
@@ -160,7 +160,7 @@ jobs:
       - run: npm ci --prefix web && npm ci --prefix e2e
       - working-directory: e2e
         run: npm run format:check && npx --no-install playwright install --with-deps chromium && npm test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: browser-failure
