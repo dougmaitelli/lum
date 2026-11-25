@@ -6,7 +6,7 @@ Lum is a Rust web manager for local hrx-loom chat models. Use one system service
 
 ## Open the library
 
-1. Follow the [installation guide](packaging/INSTALL.md) for Fedora 44 (RPM), Debian/Ubuntu (DEB), or a manual installation. CI produces x86-64 packages and a tarball. Loom 0.3.0 is an external dependency.
+1. Follow the [installation guide](packaging/INSTALL.md) for Fedora 44 (RPM), Debian/Ubuntu (DEB), or a manual installation. Download the tested x86-64 packages, tarball and checksums from [GitHub Releases](https://github.com/dougmaitelli/lum/releases/latest). Loom 0.3.0 is an external dependency.
 2. On the server, open **http://127.0.0.1:9390/**. From a workstation, first run `ssh -N -L 9390:127.0.0.1:9390 user@server`, then open the same URL. The admin listener is loopback-only and trusts local users.
 3. Choose a text package in **Catalog**, review its model card, set an alias and preset, and click **Download**. Refresh the library to check progress. Click **Start model** and open the playground once ready.
 

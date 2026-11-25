@@ -18,7 +18,7 @@ On your Strix Halo, check `/opt/lum/runtime/bin/amdf-info --format=json` and `ge
 
 ## 2. Install Lum
 
-Download **lum-linux-x86_64** from the Artifacts section of a successful GitHub Actions **Build Linux distribution** run. Extract the artifact ZIP, change into its directory, and run `sha256sum -c SHA256SUMS`. Use artifacts from a commit you trust; these are CI builds, not signed distro-repository packages.
+Open [Lum releases](https://github.com/dougmaitelli/lum/releases) and download the **RPM**, **DEB**, or **linux-x86_64.tar.gz** from the release’s Assets, plus `SHA256SUMS` from the same release. In that directory run `sha256sum --check --ignore-missing SHA256SUMS` and confirm your downloaded package is listed as `OK`. These are tested release builds, not signed distro-repository packages. Untagged development builds remain available as GitHub Actions artifacts.
 
 ### Fedora 44
 
