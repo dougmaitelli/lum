@@ -9,6 +9,8 @@ pub struct Library(pub PathBuf);
 #[derive(Debug, serde::Serialize)]
 pub struct Model {
     pub alias: String,
+    pub label: String,
+    pub context_limit: Option<i32>,
     pub repo: String,
     pub preset: String,
     pub revision: String,
@@ -44,11 +46,14 @@ impl Library {
         let lib = Self(root.to_owned());
         let db = lib.db()?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS models(alias TEXT PRIMARY KEY, repo TEXT NOT NULL, preset TEXT NOT NULL, revision TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, desired INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT ''); UPDATE models SET state='failed',error='Download interrupted. Remove and download again.' WHERE state IN ('queued','downloading');")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS model_settings(alias TEXT PRIMARY KEY REFERENCES models(alias) ON DELETE CASCADE, label TEXT NOT NULL, context_limit INTEGER CHECK(context_limit > 0));")?;
         db.execute_batch(crate::keys::SCHEMA)?;
         Ok(lib)
     }
     pub(crate) fn db(&self) -> Result<Connection> {
-        Ok(Connection::open(self.0.join("library.sqlite"))?)
+        let db = Connection::open(self.0.join("library.sqlite"))?;
+        db.pragma_update(None, "foreign_keys", true)?;
+        Ok(db)
     }
     pub fn package(&self, a: &str) -> PathBuf {
         self.0.join("models").join(a)
@@ -59,7 +64,7 @@ impl Library {
     pub fn list(&self) -> Result<Vec<Model>> {
         let db = self.db()?;
         let mut q = db.prepare(
-            "SELECT alias,repo,preset,revision,state,desired,error FROM models ORDER BY alias",
+            "SELECT alias,repo,preset,revision,state,desired,error,COALESCE(label,''),context_limit FROM models LEFT JOIN model_settings USING(alias) ORDER BY alias",
         )?;
         Ok(q.query_map([], |r| {
             Ok(Model {
@@ -70,6 +75,8 @@ impl Library {
                 state: r.get(4)?,
                 desired: r.get(5)?,
                 error: r.get(6)?,
+                label: r.get(7)?,
+                context_limit: r.get(8)?,
             })
         })?
         .collect::<rusqlite::Result<_>>()?)
@@ -91,6 +98,19 @@ impl Library {
             )? == 1,
             "Alias already belongs to another installation."
         );
+        Ok(())
+    }
+    pub fn settings(&self, alias: &str, label: &str, limit: Option<i32>) -> Result<()> {
+        let label = label.trim();
+        ensure!(
+            label.chars().count() <= 64 && !label.chars().any(char::is_control),
+            "Use a display label of at most 64 printable characters"
+        );
+        ensure!(
+            limit.is_none_or(|n| n > 0),
+            "Context limit must be a positive integer"
+        );
+        self.db()?.execute("INSERT INTO model_settings(alias,label,context_limit) VALUES(?,?,?) ON CONFLICT(alias) DO UPDATE SET label=excluded.label,context_limit=excluded.context_limit", params![alias,label,limit])?;
         Ok(())
     }
     pub fn revision(&self, a: &str, rev: &str) -> Result<()> {

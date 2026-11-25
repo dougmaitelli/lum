@@ -188,8 +188,15 @@ nav p {
   max-width: 92vw;
   padding: 5px;
 }
+.model-options .menu-action {
+  width: 100%;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  min-block-size: 0;
+}
 .model-options a,
-.model-options small {
+.model-options .menu-action {
   display: block;
   padding: 4px 8px;
 }
@@ -200,7 +207,7 @@ nav p {
 .model-options .remove-action {
   color: #ff9292;
 }
-.model-options a:hover {
+.model-options :is(a, .menu-action):hover {
   background: var(--bg);
 }
 .model-row:hover,
@@ -298,15 +305,7 @@ nav p {
 }
 #composer .compose-tools {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-.compose-tools label {
-  color: var(--muted);
-  font-size: 12px;
-}
-input[type="number"] {
-  width: 68px;
-  padding: 4px;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 #feedback {
   white-space: nowrap;

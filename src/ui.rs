@@ -133,6 +133,7 @@ pub fn router(
             "/admin/models/{alias}/{op}",
             post(model_action).layer(Extension(listener.max_loaded)),
         )
+        .route("/admin/models/{alias}/settings", post(model_settings))
         .route("/admin/chat/{alias}", post(chat))
         .route("/admin/downloads", post(download))
         .route("/metrics", get(metrics))
@@ -459,6 +460,25 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
     tokio::fs::rename(staging, app.lib.package(&d.alias)).await?;
     Ok(())
 }
+#[derive(Deserialize)]
+struct ModelSettings {
+    label: String,
+    context_limit: Option<i32>,
+}
+async fn model_settings(
+    State(app): State<App>,
+    Path(alias): Path<String>,
+    Json(settings): Json<ModelSettings>,
+) -> Ui<StatusCode> {
+    let _guard = app.gate.lock().await;
+    let m = app.model(&alias)?;
+    if m.state != "installed" || m.desired || app.engine.status().await?.contains_key(&alias) {
+        return Err(anyhow::anyhow!("Unload the installed model before changing settings").into());
+    }
+    app.lib
+        .settings(&alias, &settings.label, settings.context_limit)?;
+    Ok(StatusCode::NO_CONTENT)
+}
 async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
     let _guard = app.gate.lock().await;
     let m = app.model(a)?;
@@ -475,7 +495,7 @@ async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
                 "Model limit reached (models.max_loaded = {max_loaded}). Unload another model before loading this one."
             );
             app.engine
-                .register(a, &app.lib.package(a), &m.preset)
+                .register(a, &app.lib.package(a), &m.preset, m.context_limit)
                 .await?;
             app.lib.desired(a, true)?;
         }
@@ -510,7 +530,6 @@ struct Turn {
 struct Chat {
     prompt: String,
     history: Vec<Turn>,
-    tokens: u32,
 }
 async fn chat(
     State(app): State<App>,
@@ -541,7 +560,7 @@ fn response_text(reply: &serde_json::Value) -> Result<String> {
     }
     if choice["finish_reason"] == "length" {
         bail!(
-            "The model reached the token limit without returning answer text. Increase Token limit and retry."
+            "The model reached the token limit without returning answer text. Try a shorter conversation or check the model preset’s generation settings."
         );
     }
     bail!(
@@ -556,8 +575,8 @@ async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Val
         "Model is not loaded"
     );
     ensure!(
-        (1..=4096).contains(&c.tokens) && !c.prompt.trim().is_empty() && c.prompt.len() <= 8192,
-        "Invalid message or token limit"
+        !c.prompt.trim().is_empty() && c.prompt.len() <= 8192,
+        "Invalid message"
     );
     let mut turns = c.history;
     ensure!(
@@ -574,10 +593,7 @@ async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Val
         content: c.prompt,
     });
     let start = Instant::now();
-    let reply = app
-        .engine
-        .chat(a, &serde_json::to_value(&turns)?, c.tokens)
-        .await?;
+    let reply = app.engine.chat(a, &serde_json::to_value(&turns)?).await?;
     let sec = start.elapsed().as_secs_f64();
     turns.push(Turn {
         role: "assistant".into(),

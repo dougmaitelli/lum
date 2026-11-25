@@ -116,6 +116,8 @@ On the server, visit `http://127.0.0.1:9390/`. From another computer, run `ssh -
 3. Select an installed model from the sidebar and click **Load model**. When the green dot appears, send a message. Chat keeps history per model in the browser tab and returns a complete reply with elapsed time and reported output tokens/s (including prompt time). `/metrics` serves the raw Prometheus counters. The browser waits for complete replies; API clients may request SSE streaming.
 The system service installs models in `/var/lib/lum/models/<alias>/`; during installation the staging path is `/var/lib/lum/models/.<alias>.partial`. A foreground `lum run` uses `$XDG_DATA_HOME/lum/models/` or, by default, `~/.local/share/lum/models/`. Loom’s shared fetch cache is separate (normally `/var/lib/lum/.cache/loom/` for the service).
 
+For an unloaded model, choose **… → Settings** to edit its display label or context limit. The API model ID stays the same. Context covers prompt, history and reply; leave it blank for the preset default. Loom checks the requested capacity on load. Chat uses the preset’s output-token default rather than imposing a 128-token cap; API clients can still specify `max_tokens` per request.
+
 4. The eject icon in the model’s sidebar row unloads it. Once unloaded, choose **… → Remove** and confirm to delete its local package; it does not clear the SDK cache. Allow disk space for both the cache and installed weights.
 
 ## Removal

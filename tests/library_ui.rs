@@ -348,6 +348,14 @@ async fn library_forms_chat_restore_and_remove() -> Result<()> {
         fs::copy(f.path(), model.join(f.file_name()))?;
     }
     Connection::open(dir.join("state/library.sqlite"))?.execute("INSERT INTO models(alias,repo,preset,state) VALUES('check','loom-fun/fixture','check','installed')",[])?;
+    let settings = |limit: i32| {
+        client
+            .post(format!("{url}/admin/models/check/settings"))
+            .header("Origin", &url)
+            .json(&serde_json::json!({"label":"Fixture","context_limit":limit}))
+    };
+    assert_eq!(settings(0).send().await?.status(), StatusCode::BAD_REQUEST);
+    settings(80).send().await?.error_for_status()?;
     assert_eq!(
         client
             .post(format!("{url}/admin/models/check/start"))
@@ -358,10 +366,11 @@ async fn library_forms_chat_restore_and_remove() -> Result<()> {
         StatusCode::NO_CONTENT
     );
     until_state(&client, &url, |s| s["models"][0]["loaded"] == true).await?;
+    assert_eq!(settings(64).send().await?.status(), StatusCode::BAD_REQUEST);
     let chat = client
         .post(format!("{url}/admin/chat/check"))
         .header("Origin", &url)
-        .json(&serde_json::json!({"tokens":4,"history":[],"prompt":"a"}))
+        .json(&serde_json::json!({"history":[],"prompt":"a"}))
         .send()
         .await?
         .error_for_status()?
@@ -383,7 +392,12 @@ async fn library_forms_chat_restore_and_remove() -> Result<()> {
     check_inference(&client, &url, "check").await?;
     drop(first);
     let (_second, url) = serve(dir).await?;
-    until_state(&client, &url, |s| s["models"][0]["loaded"] == true).await?;
+    until_state(&client, &url, |s| {
+        s["models"][0]["loaded"] == true
+            && s["models"][0]["context_limit"] == 80
+            && s["models"][0]["label"] == "Fixture"
+    })
+    .await?;
     assert_eq!(
         client
             .post(format!("{url}/admin/models/check/stop"))

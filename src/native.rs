@@ -74,14 +74,24 @@ impl Native {
             .map(|e| (e.id, e.loom))
             .collect())
     }
-    pub async fn register(&self, a: &str, dir: &Path, preset: &str) -> Result<()> {
+    pub async fn register(
+        &self,
+        a: &str,
+        dir: &Path,
+        preset: &str,
+        context_limit: Option<i32>,
+    ) -> Result<()> {
         let mut model = json!({"path":"model.json"});
         if !preset.is_empty() {
             model["preset"] = json!(preset);
         }
+        let mut definition = json!({"kind":"text"});
+        if let Some(limit) = context_limit {
+            definition["context_capacity"] = json!(limit);
+        }
         self.call(
             "/v1/models/register",
-            Some(json!({"name":a,"base_directory":dir,"model":model,"definition":{"kind":"text"}})),
+            Some(json!({"name":a,"base_directory":dir,"model":model,"definition":definition})),
         )
         .await?;
         Ok(())
@@ -102,11 +112,11 @@ impl Native {
             .send()
             .await?)
     }
-    pub async fn chat(&self, a: &str, messages: &Value, tokens: u32) -> Result<Value> {
+    pub async fn chat(&self, a: &str, messages: &Value) -> Result<Value> {
         Ok(self
             .call(
                 "/v1/chat/completions",
-                Some(json!({"model":a,"messages":messages,"max_tokens":tokens,"stream":false})),
+                Some(json!({"model":a,"messages":messages,"stream":false})),
             )
             .await?
             .json()

@@ -163,7 +163,7 @@ pub async fn run(foreground: bool) -> Result<()> {
                     continue;
                 }
                 if let Err(e) = engine
-                    .register(&m.alias, &lib.package(&m.alias), &m.preset)
+                    .register(&m.alias, &lib.package(&m.alias), &m.preset, m.context_limit)
                     .await
                 {
                     lib.finish(&m.alias, "installed", &format!("Restore failed: {e:#}"))?;

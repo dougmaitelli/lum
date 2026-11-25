@@ -190,6 +190,17 @@ test("removal is confirmed, not triggered by navigation", async ({ page }) => {
   ).toBeVisible();
   await page.getByRole("link", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Options for instruct" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Model settings" });
+  await dialog.getByLabel("Display label").fill("My model");
+  await dialog.getByLabel("Context limit (tokens)").fill("2048");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("link", { name: "My model" })).toHaveAttribute(
+    "href",
+    "/chat/instruct",
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "Options for My model" }).click();
   await page.getByRole("link", { name: "Remove", exact: true }).click();
   await page.getByRole("button", { name: "Remove files" }).click();
   await expect(

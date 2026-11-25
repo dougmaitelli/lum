@@ -3,6 +3,7 @@
   import { snapshot, modelAction, type Snapshot } from "../api/admin";
   import Conversation from "../components/Conversation.svelte";
   import StatusBar from "../components/StatusBar.svelte";
+  import ModelSettings from "../components/ModelSettings.svelte";
   import Downloads from "../components/Downloads.svelte";
   import AddModel from "../components/AddModel.svelte";
   let data = $state<Snapshot>({
@@ -16,7 +17,7 @@
     error = $state(""),
     stale = $state(false),
     working = $state(false);
-  let add: AddModel, downloads: Downloads;
+  let add: AddModel, downloads: Downloads, settings: ModelSettings;
   let conversation = $state<Conversation>();
   let models = $derived(data.models.filter((m) => m.state === "installed")),
     current = $derived(models.find((m) => m.alias === selected)),
@@ -92,7 +93,7 @@
             href={"/chat/" + m.alias}
             aria-current={m.alias === selected ? "page" : undefined}
           >
-            <span>{m.alias}</span>
+            <span>{m.label || m.alias}</span>
 
             {#if m.loaded && !stale}
               <span class="loaded" role="img" aria-label="Loaded" title="Loaded"></span>
@@ -120,7 +121,7 @@
             <button
               class="inline-action row-actions"
               disabled={working || stale || !data.online}
-              aria-label={`Options for ${m.alias}`}
+              aria-label={`Options for ${m.label || m.alias}`}
               title="Model options"
               popovertarget={`options-${m.alias}`}
               onclick={(e) => {
@@ -133,6 +134,15 @@
               …
             </button>
             <div popover class="model-options" id={`options-${m.alias}`}>
+              <button
+                class="menu-action"
+                onclick={() => {
+                  document.getElementById(`options-${m.alias}`)?.hidePopover();
+                  settings.open(m);
+                }}
+              >
+                Settings
+              </button>
               <a class="remove-action" href={"/remove/" + m.alias}>Remove</a>
             </div>
           {/if}
@@ -169,7 +179,7 @@
     <header class="chat-head">
       <div>
         <small>Chat</small>
-        <h1>{current?.alias ?? "New conversation"}</h1>
+        <h1>{current?.label || current?.alias || "New conversation"}</h1>
 
         {#if current}
           <small>
@@ -201,6 +211,7 @@
     {/key}
   </main>
   <StatusBar {data} {stale} />
+  <ModelSettings bind:this={settings} onsave={refresh} />
   <Downloads bind:this={downloads} {jobs} progress={data.progress} />
   <AddModel
     bind:this={add}

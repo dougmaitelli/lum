@@ -1,7 +1,8 @@
 <script lang="ts">
   import { catalog, install, packagePresets, type Model } from "../api/admin";
   let { failures, ondownload }: { failures: Model[]; ondownload: () => void } = $props();
-  let dialog: HTMLDialogElement;
+  import Dialog from "./Dialog.svelte";
+  let dialog: Dialog;
   let repo = $state(""),
     preset = $state(""),
     list = $state<string[] | null>(null),
@@ -88,8 +89,7 @@
   }
 </script>
 
-<dialog bind:this={dialog} aria-label="Add model" onclose={resetForm}>
-  <h2>Add model</h2>
+<Dialog bind:this={dialog} title="Add model" onclose={resetForm}>
   <p class="muted">
     Search loom-fun packages or paste a Hugging Face model link from a publisher you trust. The
     repository must contain a Loom package.
@@ -155,20 +155,8 @@
     {/if}
     <p class="muted">Installs the current default revision. Load the model separately.</p>
     <p class="warning" role="status">{error}</p>
-    <footer>
-      <button type="button" onclick={() => dialog.close()}>Close</button>
-      <button type="button" class="primary" disabled={!canDownload} onclick={submit}>
-        Download
-      </button>
-    </footer>
   </div>
-</dialog>
-
-<style>
-  footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-</style>
+  {#snippet actions()}
+    <button type="button" class="primary" disabled={!canDownload} onclick={submit}>Download</button>
+  {/snippet}
+</Dialog>

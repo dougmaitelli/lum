@@ -18,7 +18,6 @@
   }
   let turns = $state<Turn[]>(previous()),
     prompt = $state(previousDraft()),
-    tokens = $state(128),
     feedback = $state(""),
     busy = $state(false),
     messages: HTMLElement;
@@ -55,7 +54,7 @@
     feedback = "Waiting for reply…";
     void scroll();
     try {
-      const result = await reply(alias, submitted, history, tokens);
+      const result = await reply(alias, submitted, history);
       turns = result.turns;
       store(alias, result.turns);
       feedback = result.metrics;
@@ -122,9 +121,6 @@
       }}
     ></textarea>
     <div class="compose-tools">
-      <label>
-        Token limit <input type="number" bind:value={tokens} min="1" max="4096" required />
-      </label>
       <small id="feedback" role="status">{feedback}</small>
       <button class="primary" disabled={!online || !model.loaded || busy}>Send</button>
     </div>
