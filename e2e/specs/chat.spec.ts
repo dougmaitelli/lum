@@ -4,6 +4,11 @@ test("chat, add a model in the background, switch models and manage a key", asyn
 }) => {
   await page.goto("/");
   await expect(page.getByRole("img", { name: "Loaded" })).toHaveCount(1);
+  for (const row of await page.locator(".model-row").all()) {
+    const action = await row.locator(".row-actions").boundingBox();
+    expect(action?.height).toBe((await row.boundingBox())?.height);
+    expect(action?.width).toBe(action?.height);
+  }
   const prompt = page.getByLabel("Message", { exact: true });
   await prompt.fill("hello");
   await prompt.press("Enter");
@@ -32,12 +37,33 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   await page.keyboard.press("Escape");
   await expect(prompt).toHaveValue("unsent draft");
   await model.click();
+  await expect(
+    page.getByRole("button", { name: "Options for code" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Unload code", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Options for code" }),
+  ).toBeVisible();
   await expect(page.locator(".chat-head")).toContainText("chat-16gb");
   await page.getByRole("button", { name: "Load model" }).click();
-  await expect(page.getByRole("button", { name: "Unload" })).toBeVisible();
-  await page.getByRole("link", { name: "code Loaded" }).click();
+  await expect(
+    page.getByRole("button", { name: "Unload browser-fixture", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".chat-head").getByRole("button", { name: /unload/i }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Unload browser-fixture", exact: true })
+    .click();
+  await page.getByRole("link", { name: "code", exact: true }).click();
+  await page.getByRole("button", { name: "Load model" }).click();
   await expect(prompt).toHaveValue("unsent draft");
   await expect(page.getByText("Mock reply from code: hello")).toBeVisible();
+  await page.getByRole("button", { name: "Clear chat" }).click();
+  await expect(prompt).toHaveValue("");
+  await expect(
+    page.getByRole("heading", { name: "Start a conversation" }),
+  ).toBeVisible();
   const downloads = page.getByRole("button", {
     name: "Downloads: 0 queued or active",
   });
@@ -163,8 +189,8 @@ test("removal is confirmed, not triggered by navigation", async ({ page }) => {
     page.getByRole("heading", { name: "Remove instruct?" }),
   ).toBeVisible();
   await page.getByRole("link", { name: "Cancel" }).click();
-  await page.getByRole("link", { name: "instruct" }).click();
-  await page.getByRole("link", { name: "Remove…" }).click();
+  await page.getByRole("button", { name: "Options for instruct" }).click();
+  await page.getByRole("link", { name: "Remove", exact: true }).click();
   await page.getByRole("button", { name: "Remove files" }).click();
   await expect(
     page.getByRole("navigation", { name: "Downloaded models" }),

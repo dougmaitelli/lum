@@ -141,7 +141,6 @@ aside header {
 }
 nav {
   overflow: auto;
-  padding: 0 8px;
 }
 nav p {
   padding: 8px;
@@ -149,20 +148,67 @@ nav p {
 .model {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   gap: 5px;
-  padding: 9px 8px;
-  border-radius: 5px;
+  padding: 0 12px;
   text-decoration: none;
   color: var(--text);
-  overflow-wrap: anywhere;
 }
-.model:hover,
-.model[aria-current="page"] {
+.model > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model > .loaded {
+  flex: none;
+}
+.model-row {
+  --row-size: calc(1.5em + 18px);
+  block-size: var(--row-size);
+  display: flex;
+  align-items: stretch;
+}
+.model-row .model {
+  flex: 1;
+  min-width: 0;
+}
+.row-actions {
+  flex: none;
+  inline-size: var(--row-size);
+  border-radius: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+}
+.model-options[popover] {
+  inset: min(var(--menu-top), calc(100dvh - 6rem)) var(--menu-right) auto auto;
+  width: max-content;
+  max-width: 92vw;
+  padding: 5px;
+}
+.model-options a,
+.model-options small {
+  display: block;
+  padding: 4px 8px;
+}
+.model-options a {
+  color: var(--text);
+  text-decoration: none;
+}
+.model-options .remove-action {
+  color: #ff9292;
+}
+.model-options a:hover {
+  background: var(--bg);
+}
+.model-row:hover,
+.model-row:has(.model[aria-current="page"]) {
   background: #303b41;
 }
-.model[aria-current="page"] {
-  box-shadow: inset 2px 0 var(--accent);
+.model-row :focus-visible {
+  outline-offset: -2px;
 }
 .side-foot {
   margin-top: auto;
@@ -238,8 +284,10 @@ nav p {
   border: 1px solid var(--line);
   border-radius: 8px;
 }
-textarea {
+#prompt {
   width: 100%;
+  /* Two text lines, plus the field's vertical padding and borders. */
+  min-height: calc(2lh + 16px);
   resize: vertical;
   max-height: 25vh;
 }
@@ -250,7 +298,7 @@ textarea {
 }
 #composer .compose-tools {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 .compose-tools label {
   color: var(--muted);
@@ -265,18 +313,6 @@ input[type="number"] {
   overflow-x: auto;
   scrollbar-width: none;
   font-variant-numeric: tabular-nums;
-}
-@media (max-width: 660px) {
-  #composer .compose-tools {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-  #feedback {
-    grid-column: 2/-1;
-  }
-  #reset {
-    grid-column: 2;
-    justify-self: end;
-  }
 }
 dialog,
 [popover] {
@@ -483,7 +519,7 @@ summary {
     display: flex;
     overflow-x: auto;
   }
-  .model {
+  .model-row {
     flex: none;
   }
   .side-foot {

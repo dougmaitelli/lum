@@ -42,10 +42,15 @@ fn print_hierarchy_and_validate_before_writing() {
     let dir = dir.path();
     assert_eq!(ok(dir, &["api.host"]).trim(), "127.0.0.1");
     assert_eq!(ok(dir, &["api.port"]).trim(), "9390");
+    assert_eq!(ok(dir, &["models.max_loaded"]).trim(), "1");
+    ok(dir, &["models.max_loaded", "3"]);
+    assert_eq!(ok(dir, &["models.max_loaded"]).trim(), "3");
     ok(dir, &["api.port", "9494"]);
     let file = dir.join("lum/config.json");
     let original = fs::read(&file).unwrap();
     for args in [
+        ["models.max_loaded", "0"],
+        ["models.max_loaded", "-1"],
         ["api.port", "65536"],
         ["api.port", "0"],
         ["api.host", "*"],
@@ -63,7 +68,7 @@ fn print_hierarchy_and_validate_before_writing() {
     assert!(!fs::read_to_string(file).unwrap().contains("credential"));
     assert_eq!(
         ok(dir, &[]),
-        "api:\n  host: 0.0.0.0\n  port: 9494\n  name: -\ninference:\n  host: 127.0.0.1\n  port: 9391\n"
+        "api:\n  host: 0.0.0.0\n  port: 9494\n  name: -\ninference:\n  host: 127.0.0.1\n  port: 9391\nmodels:\n  max_loaded: 3\n"
     );
     assert!(!config(dir, &["--reset-password"]).status.success());
 }

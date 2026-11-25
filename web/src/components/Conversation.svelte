@@ -68,7 +68,11 @@
       busy = false;
     }
   }
-  function reset() {
+  export function canClear() {
+    return !busy && Boolean(turns.length || prompt || feedback);
+  }
+  export function clear() {
+    if (busy) return;
     turns = [];
     prompt = "";
     feedback = "";
@@ -122,7 +126,6 @@
         Token limit <input type="number" bind:value={tokens} min="1" max="4096" required />
       </label>
       <small id="feedback" role="status">{feedback}</small>
-      <button id="reset" type="button" onclick={reset} disabled={busy}>New chat</button>
       <button class="primary" disabled={!online || !model.loaded || busy}>Send</button>
     </div>
   </form>

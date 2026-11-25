@@ -12,7 +12,7 @@ use std::{
 };
 
 const SYSTEM: &str = "/etc/lum/config.json";
-const USAGE: &str = "Usage: lum config [--user] [api.host|api.port|api.name|inference.host|inference.port [VALUE]]\nUse --user for lum run, otherwise settings target lum.service. Use '-' to clear api.name.";
+const USAGE: &str = "Usage: lum config [--user] [api.host|api.port|api.name|inference.host|inference.port|models.max_loaded [VALUE]]\nUse --user for lum run, otherwise settings target lum.service. Use '-' to clear api.name.";
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -27,9 +27,12 @@ struct Saved {
     inference_host: Option<IpAddr>,
     #[serde(rename = "inference.port", skip_serializing_if = "Option::is_none")]
     inference_port: Option<u16>,
+    #[serde(rename = "models.max_loaded", skip_serializing_if = "Option::is_none")]
+    max_loaded: Option<std::num::NonZeroUsize>,
 }
 #[derive(Clone)]
 pub struct Listener {
+    pub max_loaded: usize,
     pub inference: std::net::SocketAddr,
     pub host: IpAddr,
     pub port: u16,
@@ -112,6 +115,7 @@ impl Saved {
                 .context("Invalid LUM_INFERENCE_PORT")?,
         };
         Ok(Listener {
+            max_loaded: self.max_loaded.map_or(1, |n| n.get()),
             inference: std::net::SocketAddr::new(
                 self.inference_host.unwrap_or(Ipv4Addr::LOCALHOST.into()),
                 inference_port,
@@ -136,23 +140,30 @@ pub fn cli(args: &[OsString]) -> Result<()> {
     if args.is_empty()
         || matches!(
             args.as_slice(),
-            ["api.host" | "api.port" | "api.name" | "inference.host" | "inference.port"]
+            ["api.host"
+                | "api.port"
+                | "api.name"
+                | "inference.host"
+                | "inference.port"
+                | "models.max_loaded"]
         )
     {
         let l = Saved::load(&path)?.listener()?;
         let name = l.name.as_deref().unwrap_or("-");
         match args.first().copied() {
+            Some("models.max_loaded") => println!("{}", l.max_loaded),
             Some("api.host") => println!("{}", l.host),
             Some("api.port") => println!("{}", l.port),
             Some("api.name") => println!("{name}"),
             Some("inference.host") => println!("{}", l.inference.ip()),
             Some("inference.port") => println!("{}", l.inference.port()),
             _ => println!(
-                "api:\n  host: {}\n  port: {}\n  name: {name}\ninference:\n  host: {}\n  port: {}",
+                "api:\n  host: {}\n  port: {}\n  name: {name}\ninference:\n  host: {}\n  port: {}\nmodels:\n  max_loaded: {}",
                 l.host,
                 l.port,
                 l.inference.ip(),
-                l.inference.port()
+                l.inference.port(),
+                l.max_loaded
             ),
         };
         return Ok(());
@@ -161,7 +172,12 @@ pub fn cli(args: &[OsString]) -> Result<()> {
         matches!(
             args.as_slice(),
             [
-                "api.host" | "api.port" | "api.name" | "inference.host" | "inference.port",
+                "api.host"
+                    | "api.port"
+                    | "api.name"
+                    | "inference.host"
+                    | "inference.port"
+                    | "models.max_loaded",
                 _
             ]
         ),
@@ -188,6 +204,12 @@ pub fn cli(args: &[OsString]) -> Result<()> {
         }
         ["inference.port", v] => {
             saved.inference_port = Some(v.parse().context("inference.port must be 1–65535")?)
+        }
+        ["models.max_loaded", v] => {
+            saved.max_loaded = Some(
+                v.parse()
+                    .context("models.max_loaded must be a positive integer")?,
+            )
         }
         ["api.name", v] => saved.name = (*v != "-").then(|| v.to_ascii_lowercase()),
         _ => unreachable!(),

@@ -93,9 +93,13 @@ api:
 inference:
   host: 127.0.0.1
   port: 9391
+models:
+  max_loaded: 1
 ```
 
 `lum config api.host` reads one value; `sudo lum config api.port 9494` sets the port. To return to local-only access use `sudo lum config api.host 127.0.0.1` and `sudo lum config api.name -`. Restart after changes. The `api.*` settings control only the **admin HTTP listener**.
+
+By default one model may be loaded at a time. To allow two, run `sudo lum config models.max_loaded 2` and `sudo systemctl restart lum.service`. Loading beyond the limit is rejected; Lum never evicts a running model to make room. When restarting with a lower limit, Lum restores previously loaded models in alias order up to the limit and leaves the rest installed but unloaded. The limit does not restrict downloads or simultaneous requests to an already loaded model.
 
 The **API keys** sidebar page shows the inference base URL to use in your client. Load a model, create a named key there, copy it once, and supply it to an OpenAI-compatible client as its API key. SQLite stores only the key digest and metadata. Revoking a key blocks new requests immediately; it does not cancel a request already underway.
 
@@ -112,7 +116,7 @@ On the server, visit `http://127.0.0.1:9390/`. From another computer, run `ssh -
 3. Select an installed model from the sidebar and click **Load model**. When the green dot appears, send a message. Chat keeps history per model in the browser tab and returns a complete reply with elapsed time and reported output tokens/s (including prompt time). `/metrics` serves the raw Prometheus counters. The browser waits for complete replies; API clients may request SSE streaming.
 The system service installs models in `/var/lib/lum/models/<alias>/`; during installation the staging path is `/var/lib/lum/models/.<alias>.partial`. A foreground `lum run` uses `$XDG_DATA_HOME/lum/models/` or, by default, `~/.local/share/lum/models/`. Loom’s shared fetch cache is separate (normally `/var/lib/lum/.cache/loom/` for the service).
 
-4. **Unload** gracefully retires that alias. After retirement, **Remove…** deletes its local package; it does not clear the SDK cache. Allow disk space for both the cache and installed weights.
+4. The eject icon in the model’s sidebar row unloads it. Once unloaded, choose **… → Remove** and confirm to delete its local package; it does not clear the SDK cache. Allow disk space for both the cache and installed weights.
 
 ## Removal
 

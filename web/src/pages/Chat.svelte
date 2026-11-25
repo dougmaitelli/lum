@@ -17,6 +17,7 @@
     stale = $state(false),
     working = $state(false);
   let add: AddModel, downloads: Downloads;
+  let conversation = $state<Conversation>();
   let models = $derived(data.models.filter((m) => m.state === "installed")),
     current = $derived(models.find((m) => m.alias === selected)),
     jobs = $derived(
@@ -38,12 +39,12 @@
       if (id === newest) stale = true;
     }
   }
-  async function change(op: string) {
-    if (!current) return;
+  async function change(op: string, alias = current?.alias) {
+    if (!alias || working) return;
     working = true;
     error = "";
     try {
-      await modelAction(current.alias, op);
+      await modelAction(alias, op);
       await refresh();
     } catch (e) {
       error = String(e);
@@ -84,17 +85,58 @@
         <p class="muted">No models yet.</p>
       {/if}
       {#each models as m (m.alias)}
-        <a
-          class="model"
-          href={"/chat/" + m.alias}
-          aria-current={m.alias === selected ? "page" : undefined}
-        >
-          <span>{m.alias}</span>
+        <div class="model-row">
+          <a
+            class="model"
+            title={m.alias}
+            href={"/chat/" + m.alias}
+            aria-current={m.alias === selected ? "page" : undefined}
+          >
+            <span>{m.alias}</span>
 
-          {#if m.loaded && !stale}
-            <span class="loaded" role="img" aria-label="Loaded" title="Loaded"></span>
+            {#if m.loaded && !stale}
+              <span class="loaded" role="img" aria-label="Loaded" title="Loaded"></span>
+            {/if}
+          </a>
+          {#if m.registered || m.desired}
+            <button
+              class="inline-action row-actions"
+              aria-label={`Unload ${m.alias}`}
+              title={`Unload ${m.alias}`}
+              disabled={working || stale || !data.online}
+              onclick={() => change("stop", m.alias)}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="m12 4 9 12H3zM3 18h18v3H3z" />
+              </svg>
+            </button>
+          {:else}
+            <button
+              class="inline-action row-actions"
+              disabled={working || stale || !data.online}
+              aria-label={`Options for ${m.alias}`}
+              title="Model options"
+              popovertarget={`options-${m.alias}`}
+              onclick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const menu = document.getElementById(`options-${m.alias}`);
+                menu?.style.setProperty("--menu-right", `${window.innerWidth - rect.right}px`);
+                menu?.style.setProperty("--menu-top", `${rect.bottom + 3}px`);
+              }}
+            >
+              …
+            </button>
+            <div popover class="model-options" id={`options-${m.alias}`}>
+              <a class="remove-action" href={"/remove/" + m.alias}>Remove</a>
+            </div>
           {/if}
-        </a>
+        </div>
       {/each}
     </nav>
     <div class="side-foot">
@@ -138,13 +180,13 @@
         {/if}
       </div>
       <div id="controls">
-        {#if current && data.online && !stale}
-          {#if current.registered || current.desired}
-            <button disabled={working} onclick={() => change("stop")}>Unload</button>
-          {:else}
-            <button disabled={working} onclick={() => change("start")}>Load model</button>
-            <a class="quiet" href={"/remove/" + current.alias}>Remove…</a>
-          {/if}
+        {#if current && data.online && !stale && !current.registered && !current.desired}
+          <button disabled={working} onclick={() => change("start")}>Load model</button>
+        {/if}
+        {#if current}
+          <button disabled={!conversation?.canClear()} onclick={() => conversation?.clear()}>
+            Clear chat
+          </button>
         {/if}
         {#if error || current?.error}
           <span class="warning">
@@ -155,7 +197,7 @@
     </header>
 
     {#key current?.alias}
-      <Conversation model={current} online={data.online && !stale} />
+      <Conversation bind:this={conversation} model={current} online={data.online && !stale} />
     {/key}
   </main>
   <StatusBar {data} {stale} />

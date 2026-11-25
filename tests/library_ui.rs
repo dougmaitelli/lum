@@ -266,6 +266,15 @@ async fn isolated_preview_workflow() -> Result<()> {
             .post(format!("{url}/admin/models/test/{op}"))
             .header("Origin", &url)
     };
+    let denied = change("start").send().await?;
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    assert!(denied.text().await?.contains("models.max_loaded = 1"));
+    client
+        .post(format!("{url}/admin/models/code/stop"))
+        .header("Origin", &url)
+        .send()
+        .await?
+        .error_for_status()?;
     change("start").send().await?.error_for_status()?;
     let reply = client
         .post(format!("{url}/admin/chat/test"))

@@ -129,7 +129,10 @@ pub fn router(
         .route("/admin/catalog", get(catalog))
         .route("/admin/presets", get(presets::list))
         .route("/admin/state", get(state::status))
-        .route("/admin/models/{alias}/{op}", post(model_action))
+        .route(
+            "/admin/models/{alias}/{op}",
+            post(model_action).layer(Extension(listener.max_loaded)),
+        )
         .route("/admin/chat/{alias}", post(chat))
         .route("/admin/downloads", post(download))
         .route("/metrics", get(metrics))
@@ -253,8 +256,9 @@ async fn index() -> axum::response::Html<&'static str> {
 async fn model_action(
     State(app): State<App>,
     Path((a, op)): Path<(String, String)>,
+    Extension(max_loaded): Extension<usize>,
 ) -> Ui<StatusCode> {
-    apply(&app, &a, &op).await?;
+    apply(&app, &a, &op, max_loaded).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 fn api_base(addr: std::net::SocketAddr, headers: &axum::http::HeaderMap) -> Result<String> {
@@ -455,15 +459,20 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
     tokio::fs::rename(staging, app.lib.package(&d.alias)).await?;
     Ok(())
 }
-async fn apply(app: &App, a: &str, op: &str) -> Result<()> {
+async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
     let _guard = app.gate.lock().await;
     let m = app.model(a)?;
-    let registered = app.engine.status().await?.contains_key(a);
+    let registrations = app.engine.status().await?;
+    let registered = registrations.contains_key(a);
     match op {
         "start" => {
             ensure!(
                 m.state == "installed" && !registered,
                 "Package must be installed and stopped"
+            );
+            ensure!(
+                registrations.len() < max_loaded,
+                "Model limit reached (models.max_loaded = {max_loaded}). Unload another model before loading this one."
             );
             app.engine
                 .register(a, &app.lib.package(a), &m.preset)

@@ -102,6 +102,7 @@ pub async fn run(foreground: bool) -> Result<()> {
     let app = App::new(lib.clone(), engine.clone(), sdk.clone())?;
     let (phase, rx) = watch::channel(Setup::Preparing);
     let retry = Arc::new(Notify::new());
+    let max_loaded = settings.max_loaded;
     let router = ui::router(app, settings, rx, retry.clone(), sdk.description())
         .into_make_service_with_connect_info::<ui::Destination>();
     let mut term = signal(SignalKind::terminate())?;
@@ -147,16 +148,27 @@ pub async fn run(foreground: bool) -> Result<()> {
             })
             .await
             .context("Engine did not become ready")?;
+            let mut restored = 0;
             for m in lib
                 .list()?
                 .into_iter()
                 .filter(|m| m.desired && m.state == "installed")
             {
+                if restored >= max_loaded {
+                    lib.desired(&m.alias, false)?;
+                    eprintln!(
+                        "Not restoring {}: models.max_loaded = {max_loaded}",
+                        m.alias
+                    );
+                    continue;
+                }
                 if let Err(e) = engine
                     .register(&m.alias, &lib.package(&m.alias), &m.preset)
                     .await
                 {
                     lib.finish(&m.alias, "installed", &format!("Restore failed: {e:#}"))?;
+                } else {
+                    restored += 1;
                 }
             }
             phase.send_replace(Setup::Ready);

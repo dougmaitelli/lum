@@ -172,6 +172,7 @@ pub async fn run(hot_reload: bool) -> Result<()> {
         None
     };
     let cfg = Listener {
+        max_loaded: 1,
         inference: api.local_addr()?,
         host: addr.ip(),
         port: ui_port,
