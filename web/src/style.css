@@ -270,9 +270,7 @@ nav p {
   font-size: 12px;
   color: var(--muted);
 }
-.message p {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.message-body {
   background: var(--panel);
   border-radius: 7px;
   padding: 9px 12px;
@@ -281,7 +279,7 @@ nav p {
 .message[data-role="user"] {
   align-self: flex-end;
 }
-.message[data-role="user"] p {
+.message[data-role="user"] .message-body {
   background: #283d39;
 }
 .composer-area {

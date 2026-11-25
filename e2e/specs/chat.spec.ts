@@ -192,6 +192,34 @@ test("reload restores an in-flight prompt without resending and reports a partia
   );
 });
 
+test("chat renders fenced code as literal text, including unfinished blocks", async ({
+  page,
+}) => {
+  await page.goto("/chat/Qwen3-8B");
+  const snippet = "  <button>Example</button>\n";
+  const message = `Example:\n\`\`\`html\n${snippet}\`\`\`\nAnother:\n~~~js\nconst n = 2;`;
+  const prompt = page.getByLabel("Message", { exact: true });
+  await prompt.fill(message);
+  await prompt.press("Enter");
+  const response = page.locator('[data-role="assistant"]');
+  await expect(response.locator("pre code").nth(1)).toHaveText("const n = 2;");
+  await expect(response.locator(".code-block small")).toHaveText([
+    "html",
+    "js",
+  ]);
+  expect(await response.locator("pre code").first().textContent()).toBe(
+    snippet,
+  );
+  await expect(response.locator(".hljs-keyword")).toHaveText("const");
+  await expect(response.getByRole("button")).toHaveCount(0);
+  await expect(response.getByText("Another:", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Send", exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(response.locator("pre code")).toHaveCount(2);
+});
+
 test("Stop interrupts a live reply and keeps the visible text", async ({
   page,
 }) => {

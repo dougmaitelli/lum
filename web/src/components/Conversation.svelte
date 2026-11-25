@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
   import type { Turn, Model } from "../api/admin";
+  import MessageContent from "./MessageContent.svelte";
   import { streamReply } from "../api/chat";
   let {
     model,
@@ -139,7 +140,7 @@
   {#each turns as turn, i (i)}
     <article class="message" data-role={turn.role}>
       <strong>{turn.role === "user" ? "You" : "Response"}</strong>
-      <p>{turn.content}</p>
+      <MessageContent content={turn.content} />
     </article>
   {/each}
 </section>
