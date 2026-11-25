@@ -4,6 +4,7 @@ mod state;
 use crate::{
     library::{Library, Model, slug, valid_repo},
     native::Native,
+    runtime::Runtime,
 };
 use anyhow::{Context, Result, bail, ensure};
 use axum::{
@@ -18,16 +19,15 @@ use axum::{
 use reqwest::Client;
 use serde::Deserialize;
 use std::{
-    path::PathBuf,
     process::Stdio,
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{io::AsyncReadExt, process::Command, sync::Mutex};
+use tokio::{io::AsyncReadExt, sync::Mutex};
 
 #[derive(Clone)]
 enum Packages {
-    LoomFetch(PathBuf),
+    LoomFetch(Runtime),
     #[cfg(feature = "dev-ui")]
     Fixtures,
 }
@@ -42,7 +42,7 @@ pub struct App {
     log: Arc<Mutex<Vec<u8>>>,
 }
 impl App {
-    pub fn new(lib: Library, engine: Native, fetch: PathBuf) -> Result<Self> {
+    pub fn new(lib: Library, engine: Native, fetch: Runtime) -> Result<Self> {
         Self::with_packages(lib, engine, Packages::LoomFetch(fetch))
     }
     fn with_packages(lib: Library, engine: Native, packages: Packages) -> Result<Self> {
@@ -395,10 +395,10 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
         sha: String,
     }
     #[cfg(not(feature = "dev-ui"))]
-    let Packages::LoomFetch(bin) = &app.packages;
+    let Packages::LoomFetch(runtime) = &app.packages;
     #[cfg(feature = "dev-ui")]
-    let bin = match &app.packages {
-        Packages::LoomFetch(bin) => bin,
+    let runtime = match &app.packages {
+        Packages::LoomFetch(runtime) => runtime,
         Packages::Fixtures => {
             return crate::dev::download(&app.lib, &d.alias, &d.repo, &app.log).await;
         }
@@ -418,7 +418,7 @@ async fn fetch(app: &App, d: &Download) -> Result<()> {
     );
     app.lib.revision(&d.alias, &rev)?;
     let staging = app.lib.staging(&d.alias);
-    let mut cmd = Command::new(bin);
+    let mut cmd = runtime.fetch_command();
     cmd.arg(format!("huggingface:{}@{rev}", d.repo))
         .args(["--no-input", "--materialize=copy", "--output"])
         .arg(&staging);
@@ -510,6 +510,36 @@ async fn chat(
 ) -> Ui<Json<serde_json::Value>> {
     chat_result(&app, &a, c).await.map_err(Into::into)
 }
+fn response_text(reply: &serde_json::Value) -> Result<String> {
+    let choice = &reply["choices"][0];
+    let text = match &choice["message"]["content"] {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(parts) => parts
+            .iter()
+            .filter(|p| p["type"] == "text")
+            .filter_map(|p| p["text"].as_str())
+            .collect(),
+        _ => String::new(),
+    };
+    if !text.trim().is_empty() {
+        return Ok(text);
+    }
+    if let Some(refusal) = choice["message"]["refusal"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+    {
+        return Ok(refusal.into());
+    }
+    if choice["finish_reason"] == "length" {
+        bail!(
+            "The model reached the token limit without returning answer text. Increase Token limit and retry."
+        );
+    }
+    bail!(
+        "Loom returned no displayable answer text (finish reason: {}).",
+        choice["finish_reason"].as_str().unwrap_or("not reported")
+    );
+}
 async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Value>> {
     app.model(a)?;
     ensure!(
@@ -540,12 +570,9 @@ async fn chat_result(app: &App, a: &str, c: Chat) -> Result<Json<serde_json::Val
         .chat(a, &serde_json::to_value(&turns)?, c.tokens)
         .await?;
     let sec = start.elapsed().as_secs_f64();
-    let content = reply["choices"][0]["message"]["content"]
-        .as_str()
-        .context("No text in Loom response")?;
     turns.push(Turn {
         role: "assistant".into(),
-        content: content.into(),
+        content: response_text(&reply)?,
     });
     let usage = reply["usage"]["completion_tokens"]
         .as_u64()
@@ -567,6 +594,39 @@ async fn metrics(State(app): State<App>) -> Ui<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn chat_extracts_visible_text_or_explains_empty_answers() {
+        use serde_json::json;
+        let extract = |message, reason| {
+            response_text(&json!({"choices":[{"message":message,"finish_reason":reason}]}))
+        };
+        assert_eq!(
+            extract(json!({"content":"hello"}), "stop").unwrap(),
+            "hello"
+        );
+        assert_eq!(
+            extract(
+                json!({"content":[{"type":"text","text":"hello"},{"type":"text","text":" world"}]}),
+                "stop"
+            )
+            .unwrap(),
+            "hello world"
+        );
+        assert_eq!(
+            extract(json!({"refusal":"Not available"}), "stop").unwrap(),
+            "Not available"
+        );
+        assert!(
+            extract(
+                json!({"content":"  ","reasoning_content":"thinking"}),
+                "length"
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("token limit")
+        );
+        assert!(extract(json!({"content":null}), "stop").is_err());
+    }
     #[test]
     fn paste_extracts_only_model_repository_ids() {
         for link in [

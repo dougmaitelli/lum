@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import CopyableText from "../components/CopyableText.svelte";
   import { apiInfo, createKey, revokeKey, type ApiInfo } from "../api/admin";
   let info = $state<ApiInfo>(),
     name = $state(""),
@@ -42,20 +43,8 @@
   {#if info}
     <section>
       <h2>OpenAI-compatible inference</h2>
-      <label>
-        Client base URL
-        <input readonly value={info.base} />
-      </label>
-      <dl>
-        <dt>List loaded models</dt>
-        <dd><code>GET {info.base}/models</code></dd>
-        <dt>Chat completions</dt>
-        <dd><code>POST {info.base}/chat/completions</code></dd>
-      </dl>
-      <p class="muted">
-        Use a loaded model alias and send Authorization: Bearer &lt;key&gt;. A loopback URL is
-        reachable only on the server. Use a trusted network or TLS proxy for remote clients.
-      </p>
+      <div>Client base URL</div>
+      <CopyableText text={info.base} label="Copy client base URL" />
     </section>
     <section>
       <h2>API keys</h2>
@@ -63,23 +52,31 @@
         Keys grant inference access, not admin access. Anyone who can reach this admin UI can manage
         keys.
       </p>
-      {#if secret}<label class="secret">
-          Copy this key now. It won’t be shown again.
-          <input id="new-key" autocomplete="off" readonly value={secret} />
-        </label>{/if}
-      <form
-        class="key-create"
-        onsubmit={(e) => {
-          e.preventDefault();
-          void change();
-        }}
-      >
-        <label>
-          Key name
-          <input bind:value={name} maxlength="80" required placeholder="e.g. editor" />
-        </label>
-        <button class="primary" disabled={busy}>Create key</button>
-      </form>
+      <div class="key-row">
+        <form
+          class="key-create"
+          onsubmit={(e) => {
+            e.preventDefault();
+            void change();
+          }}
+        >
+          <label>
+            Key name
+            <input bind:value={name} maxlength="80" required placeholder="e.g. editor" />
+          </label>
+          <button class="primary" disabled={busy}>Create key</button>
+        </form>
+        <!-- Reserve the result's actual wrapped size, also on narrow screens. -->
+        <div
+          class="secret"
+          class:reserved={!secret}
+          inert={!secret}
+          id={secret ? "new-key" : undefined}
+        >
+          <p>Copy this key now. It won’t be shown again.</p>
+          <CopyableText text={secret || "0".repeat(47)} label="Copy generated API key" />
+        </div>
+      </div>
       {#if info.keys.length}<ul class="key-list">
           {#each info.keys as key (key.id)}<li>
               <div>

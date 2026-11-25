@@ -98,8 +98,29 @@
       {/each}
     </nav>
     <div class="side-foot">
-      <a href="/api">API</a>
-      <button popovertarget="downloads" onclick={refresh}>Downloads {jobs.length}</button>
+      <a class="button-link" href="/api">API keys</a>
+      <button
+        class="downloads-trigger"
+        popovertarget="downloads"
+        aria-label={`Downloads: ${jobs.length} queued or active`}
+        title="Downloads"
+        onclick={refresh}
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4" />
+        </svg>
+        <span class="downloads-count">{jobs.length}</span>
+      </button>
     </div>
   </aside>
   <main class="chat">

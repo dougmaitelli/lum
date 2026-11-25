@@ -47,20 +47,22 @@
   async function send() {
     if (!model?.loaded || !online || busy || !prompt.trim()) return;
     const alias = model.alias,
+      submitted = prompt,
       history = $state.snapshot(turns);
     busy = true;
-    turns = [...history, { role: "user", content: prompt }];
+    prompt = "";
+    turns = [...history, { role: "user", content: submitted }];
     feedback = "Waiting for reply…";
     void scroll();
     try {
-      const result = await reply(alias, prompt, history, tokens);
+      const result = await reply(alias, submitted, history, tokens);
       turns = result.turns;
       store(alias, result.turns);
       feedback = result.metrics;
-      prompt = "";
       void scroll();
     } catch (e) {
       turns = history;
+      prompt = submitted;
       feedback = String(e);
     } finally {
       busy = false;
@@ -86,7 +88,7 @@
 
   {#each turns as turn, i (i)}
     <article class="message" data-role={turn.role}>
-      <strong>{turn.role === "user" ? "You" : "Assistant"}</strong>
+      <strong>{turn.role === "user" ? "You" : "Response"}</strong>
       <p>{turn.content}</p>
     </article>
   {/each}

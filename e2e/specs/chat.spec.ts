@@ -38,15 +38,69 @@ test("chat, add a model in the background, switch models and manage a key", asyn
   await page.getByRole("link", { name: "code Loaded" }).click();
   await expect(prompt).toHaveValue("unsent draft");
   await expect(page.getByText("Mock reply from code: hello")).toBeVisible();
-  await page.getByRole("link", { name: "API", exact: true }).click();
-  await page.getByLabel("Key name").fill("browser test");
-  await page.getByRole("button", { name: "Create key" }).click();
-  await expect(page.locator("#new-key")).toHaveValue(/^lum_/);
+  const downloads = page.getByRole("button", {
+    name: "Downloads: 0 queued or active",
+  });
+  await downloads.click();
+  await expect(page.getByText("No active downloads.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("link", { name: "API keys", exact: true }).click();
+  const base = page.locator("code").filter({ hasText: /^https?:\/\/.+\/v1$/ });
+  await expect(base).toBeVisible();
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("button", { name: "Copy client base URL" }).click();
+  await expect(page.getByRole("status")).toHaveText("Copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    await base.textContent(),
+  );
+  const keyName = page.getByLabel("Key name");
+  const createKey = page.getByRole("button", { name: "Create key" });
+  await keyName.fill("browser test");
+  expect((await createKey.boundingBox())?.height).toBe(
+    (await keyName.boundingBox())?.height,
+  );
+  const beforeCreate = await createKey.boundingBox();
+  await createKey.click();
+  const generatedKey = page.locator("#new-key code");
+  await expect(generatedKey).toHaveText(/^lum_/);
+  expect(await createKey.boundingBox()).toEqual(beforeCreate);
+  await page.getByRole("button", { name: "Copy generated API key" }).click();
+  await expect(page.locator("#new-key").getByRole("status")).toHaveText(
+    "Copied",
+  );
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    await generatedKey.textContent(),
+  );
   await page.reload();
   await expect(page.getByText("browser test", { exact: true })).toBeVisible();
   await expect(page.locator("#new-key")).toHaveCount(0);
   await page.getByRole("button", { name: "Revoke" }).click();
   await expect(page.getByText("No active keys.")).toBeVisible();
+});
+
+test("submitting clears the composer before the reply and restores it on error", async ({
+  page,
+}) => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/admin/chat/code", async (route) => {
+    await pending;
+    await route.fulfill({ status: 400, body: "No displayable answer" });
+  });
+  await page.goto("/chat/code");
+  const prompt = page.getByLabel("Message", { exact: true });
+  await prompt.fill("retry this");
+  await prompt.press("Enter");
+  try {
+    await expect(prompt).toHaveValue("");
+    await expect(page.locator('[data-role="user"]')).toContainText(
+      "retry this",
+    );
+  } finally {
+    release();
+  }
+  await expect(prompt).toHaveValue("retry this");
+  await expect(page.locator('[data-role="assistant"]')).toHaveCount(0);
 });
 
 test("a single preset is preselected but installation requires explicit Download", async ({

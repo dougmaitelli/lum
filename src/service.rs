@@ -99,7 +99,7 @@ pub async fn run(foreground: bool) -> Result<()> {
     let socket = runtime.join("engine.sock");
     let engine = Native::new(&socket)?;
     let inference = crate::inference::router(lib.clone(), engine.clone());
-    let app = App::new(lib.clone(), engine.clone(), sdk.bin().join("loom-fetch"))?;
+    let app = App::new(lib.clone(), engine.clone(), sdk.clone())?;
     let (phase, rx) = watch::channel(Setup::Preparing);
     let retry = Arc::new(Notify::new());
     let router = ui::router(app, settings, rx, retry.clone(), sdk.description())

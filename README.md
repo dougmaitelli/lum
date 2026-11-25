@@ -14,7 +14,7 @@ Chat keeps a separate conversation per model in the browser tab and shows elapse
 
 ## Connect an OpenAI-compatible client
 
-Load a model, then open **API** in the sidebar. Copy the client base URL (normally `http://127.0.0.1:9391/v1`), create a named key, and copy the secret before leaving the page. Set the client’s model to the loaded alias. The separate inference listener supports `GET /v1/models` and `POST /v1/chat/completions` for text messages, including `stream: true`. Both require `Authorization: Bearer <key>`. Revoke a key on the same page to reject subsequent requests; no restart is needed.
+Load a model, then open **API keys** in the sidebar. Copy the client base URL (normally `http://127.0.0.1:9391/v1`), create a named key, and copy the secret before leaving the page. Set the client’s model to the loaded alias. The separate inference listener supports `GET /v1/models` and `POST /v1/chat/completions` for text messages, including `stream: true`. Both require `Authorization: Bearer <key>`. Revoke a key on the same page to reject subsequent requests; no restart is needed.
 
 To serve another machine, configure [the inference listener](packaging/INSTALL.md#configure-the-listener), not the password-free admin listener. Keys protect inference only. Keep the admin UI restricted: anyone who can reach it can create and revoke keys.
 

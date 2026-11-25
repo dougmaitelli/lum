@@ -12,6 +12,9 @@ use tokio::{process::Command, time::timeout};
 pub const VERSION: &str = "0.3.0";
 const LOCK: &str = include_str!("../runtimes/hrx-loom-0.3.0.lock");
 
+const LIVE_FETCH: &str = include_str!("../runtimes/fetch_live.py");
+
+#[derive(Clone)]
 pub enum Runtime {
     Managed(PathBuf),
     External(PathBuf),
@@ -41,6 +44,17 @@ impl Runtime {
         match self {
             Self::Managed(dir) => dir.join("bin"),
             Self::External(bin) => bin.clone(),
+        }
+    }
+    pub fn fetch_command(&self) -> Command {
+        match self {
+            Self::Managed(_) => {
+                let mut cmd = Command::new(self.bin().join("python"));
+                cmd.args(["-I", "-c", LIVE_FETCH]);
+                cmd
+            }
+            // External overrides promise a CLI, not a compatible Python SDK.
+            Self::External(bin) => Command::new(bin.join("loom-fetch")),
         }
     }
     pub fn description(&self) -> String {
@@ -179,6 +193,54 @@ async fn install(dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires the pinned hrx-loom 0.3.0 venv on PATH"]
+    async fn managed_fetch_reports_intermediate_progress_before_console_heartbeat() -> Result<()> {
+        let bin = env::split_paths(&env::var_os("PATH").unwrap_or_default())
+            .find(|p| p.join("loom-fetch").is_file() && p.join("python").is_file())
+            .context("Loom SDK venv not on PATH")?;
+        let runtime = Runtime::Managed(bin.parent().context("SDK venv root")?.into());
+        assert!(
+            runtime
+                .fetch_command()
+                .arg("--help")
+                .output()
+                .await?
+                .status
+                .success()
+        );
+        // Drive the real SDK presenter with deterministic byte events instead of
+        // relying on network speed or downloading weights in the test.
+        let driver = r#"from unittest.mock import patch
+from loom.model import fetch_main
+from loom.model.fetch_progress import ProgressEvent
+import sys
+
+def exercise():
+    report = fetch_main.ConsoleProgress(sys.stderr)
+    for t, n in [(100, 0), (100.1, 10), (100.6, 20), (101.2, 30)]:
+        with patch('time.monotonic', return_value=t):
+            report(ProgressEvent('download', path='weights', completed_bytes=n, total_bytes=100))
+    report(ProgressEvent('warning', message='test diagnostic'))
+    return 0
+fetch_main.main = exercise
+"#;
+        let out = Command::new(bin.join("python"))
+            .args(["-I", "-c", &format!("{driver}\n{LIVE_FETCH}")])
+            .output()
+            .await?;
+        let log = String::from_utf8(out.stderr)?;
+        assert!(
+            out.status.success()
+                && log.contains("20%")
+                && log.contains("30%")
+                && !log.contains("10%")
+                && log.contains("test diagnostic"),
+            "{log}"
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn refuses_noexec_before_modifying_an_existing_slot() -> Result<()> {
