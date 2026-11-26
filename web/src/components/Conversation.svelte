@@ -193,8 +193,7 @@
           e.preventDefault();
           e.currentTarget.form?.requestSubmit();
         }
-      }}
-    ></textarea>
+      }}></textarea>
     <div class="compose-tools">
       <small id="feedback" role="status">{feedback}</small>
       {#if busy}
