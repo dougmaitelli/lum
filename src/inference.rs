@@ -1,4 +1,7 @@
 //! Public inference surface: two explicit routes, never a proxy to Loom administration.
+#[cfg(test)]
+mod tests;
+mod tools;
 use crate::{
     library::{Library, slug},
     ui::{App, LoadDenied, Setup, readiness, request_load},
@@ -122,18 +125,11 @@ async fn chat(State(api): State<Api>, body: Result<Json<Value>, JsonRejection>) 
         }
     };
     let invalid = |msg: &str| error(StatusCode::BAD_REQUEST, msg, "invalid_request_error");
-    if !body["model"].as_str().is_some_and(slug)
-        || !body["messages"].as_array().is_some_and(|m| {
-            !m.is_empty()
-                && m.iter().all(|v| {
-                    matches!(v["role"].as_str(), Some("system" | "user" | "assistant"))
-                        && v["content"].is_string()
-                })
-        })
-    {
-        return invalid(
-            "Use an installed model alias and text messages with system, user or assistant roles",
-        );
+    if !body["model"].as_str().is_some_and(slug) {
+        return invalid("Use an installed model alias");
+    }
+    if let Err(msg) = tools::validate(&body) {
+        return invalid(msg);
     }
     if body.get("stream").is_some_and(|v| !v.is_boolean()) {
         return invalid("stream must be a boolean");
@@ -162,19 +158,22 @@ async fn chat(State(api): State<Api>, body: Result<Json<Value>, JsonRejection>) 
         "messages",
         "stream",
         "stream_options",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
         "max_tokens",
         "temperature",
         "top_p",
         "stop",
         "seed",
     ];
-    if body
+    if let Some(key) = body
         .as_object()
         .unwrap()
         .keys()
-        .any(|k| !allowed.contains(&k.as_str()))
+        .find(|k| !allowed.contains(&k.as_str()))
     {
-        return invalid("Unsupported chat completion option");
+        return invalid(&format!("Unsupported chat completion option: {key}"));
     }
     let streaming = body["stream"] == true;
     let load = match prepare(&api, body["model"].as_str().unwrap()).await {

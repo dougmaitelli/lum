@@ -114,10 +114,21 @@ async fn chat(
     let message = v["messages"]
         .as_array()
         .and_then(|m| m.last())
-        .and_then(|m| m["content"].as_str())
+        .and_then(|m| {
+            let content = &m["content"];
+            content.as_str().map(str::to_owned).or_else(|| {
+                Some(
+                    content
+                        .as_array()?
+                        .iter()
+                        .filter_map(|part| part["text"].as_str())
+                        .collect::<String>(),
+                )
+            })
+        })
         .ok_or(StatusCode::BAD_REQUEST)?;
     s.requests += 1;
-    let text = preview_reply(message, s.requests);
+    let text = preview_reply(&message, s.requests);
     let id = format!("chatcmpl-mock-{}", s.requests);
     if v["stream"] == true {
         let chunk = |delta: Value, finish: Value| json!({"id":id,"object":"chat.completion.chunk","created":0,"model":a,"choices":[{"index":0,"delta":delta,"finish_reason":finish}]});

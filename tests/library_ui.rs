@@ -182,6 +182,8 @@ async fn check_inference(client: &Client, admin: &str, alias: &str) -> Result<()
     for streaming in [false, true] {
         let mut body = serde_json::json!({"model":alias,"messages":[{"role":"user","content":"a"}],"max_tokens":4,"stream":streaming});
         if streaming {
+            body["messages"][0]["content"] = serde_json::json!([{"type":"text","text":"a"}]);
+            body["parallel_tool_calls"] = true.into();
             body["stream_options"] = serde_json::json!({"include_usage":"yes"});
             assert_eq!(
                 client
