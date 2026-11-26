@@ -9,7 +9,7 @@ dev-ui = []
 [dependencies]
 axum = "0.8"
 ring = "0.17"
-base64 = "0.22"
+base64 = "0.23"
 futures-util = { version = "0.3", default-features = false }
 rusqlite = { version = "0.43", features = ["bundled"] }
 anyhow = "1"
