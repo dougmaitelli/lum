@@ -24,8 +24,13 @@ export interface Turn {
   role: "assistant" | "user";
   content: string;
 }
-export async function request<T>(path: string, options?: RequestInit): Promise<T> {
+export async function adminFetch(path: string, options?: RequestInit) {
   const res = await fetch(path, options);
+  if (res.status === 401) location.replace("/login");
+  return res;
+}
+export async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await adminFetch(path, options);
   if (!res.ok) {
     const message = await res.text();
     throw Error(message.startsWith("<") ? `Request failed (${res.status})` : message);
@@ -50,6 +55,7 @@ export const packagePresets = (repo: string, signal: AbortSignal) =>
   request<string[]>("/admin/presets?" + new URLSearchParams({ repo }), { signal });
 
 export interface RuntimeStatus {
+  oidc: boolean;
   runtime: string;
   setup: { phase: "preparing" | "ready" } | { phase: "failed"; error: string };
 }

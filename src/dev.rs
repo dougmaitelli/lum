@@ -215,6 +215,7 @@ pub async fn run(hot_reload: bool) -> Result<()> {
         None
     };
     let cfg = Listener {
+        oidc: Default::default(),
         max_loaded: 1,
         inference: api.local_addr()?,
         host: addr.ip(),
@@ -222,7 +223,7 @@ pub async fn run(hot_reload: bool) -> Result<()> {
         name: None,
     };
     let (_tx, rx) = watch::channel(Setup::Ready);
-    let router = ui::router(app, cfg, rx, Arc::new(Notify::new()), "Mock runtime".into());
+    let router = ui::router(app, cfg, rx, Arc::new(Notify::new()), "Mock runtime".into())?;
     let mut term = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
     eprintln!("Lum UI preview: http://127.0.0.1:{ui_port}/");

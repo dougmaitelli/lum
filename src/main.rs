@@ -5,6 +5,7 @@ mod inference;
 mod keys;
 mod library;
 mod native;
+mod oidc;
 mod runtime;
 mod service;
 mod telemetry;

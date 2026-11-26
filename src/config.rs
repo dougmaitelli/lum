@@ -12,26 +12,28 @@ use std::{
 };
 
 const SYSTEM: &str = "/etc/lum/config.json";
-const USAGE: &str = "Usage: lum config [--user] [api.host|api.port|api.name|inference.host|inference.port|models.max_loaded [VALUE]]\nUse --user for lum run, otherwise settings target lum.service. Use '-' to clear api.name.";
+const USAGE: &str = "Usage: lum config [--user] [admin.host|admin.port|admin.name|api.host|api.port|models.max_loaded|oidc.enabled|oidc.issuer|oidc.origin|oidc.client_id|oidc.allowed_subjects|oidc.client_secret_file [VALUE]]\nUse --user for lum run, otherwise settings target lum.service. Use '-' to clear admin.name.";
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Saved {
-    #[serde(rename = "api.host", skip_serializing_if = "Option::is_none")]
+    oidc: crate::oidc::Settings,
+    #[serde(rename = "admin.host", skip_serializing_if = "Option::is_none")]
     host: Option<IpAddr>,
-    #[serde(rename = "api.port", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "admin.port", skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
-    #[serde(rename = "api.name", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "admin.name", skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    #[serde(rename = "inference.host", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "api.host", skip_serializing_if = "Option::is_none")]
     inference_host: Option<IpAddr>,
-    #[serde(rename = "inference.port", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "api.port", skip_serializing_if = "Option::is_none")]
     inference_port: Option<u16>,
     #[serde(rename = "models.max_loaded", skip_serializing_if = "Option::is_none")]
     max_loaded: Option<std::num::NonZeroUsize>,
 }
 #[derive(Clone)]
 pub struct Listener {
+    pub oidc: crate::oidc::Settings,
     pub max_loaded: usize,
     pub inference: std::net::SocketAddr,
     pub host: IpAddr,
@@ -93,7 +95,7 @@ impl Saved {
     fn listener(&self) -> Result<Listener> {
         let host = self.host.unwrap_or(Ipv4Addr::LOCALHOST.into());
         let port = match self.port {
-            Some(0) => bail!("api.port must be 1–65535"),
+            Some(0) => bail!("admin.port must be 1–65535"),
             Some(p) => p,
             None => env::var("LUM_ADMIN_PORT")
                 .unwrap_or_else(|_| "9390".into())
@@ -103,18 +105,20 @@ impl Saved {
         if let Some(n) = &self.name {
             ensure!(
                 dns_name(n),
-                "api.name must be a hostname without a scheme or port"
+                "admin.name must be a hostname without a scheme or port"
             );
         }
         let inference_port = match self.inference_port {
-            Some(0) => bail!("inference.port must be 1–65535"),
+            Some(0) => bail!("api.port must be 1–65535"),
             Some(p) => p,
             None => env::var("LUM_INFERENCE_PORT")
                 .unwrap_or_else(|_| "9391".into())
                 .parse()
                 .context("Invalid LUM_INFERENCE_PORT")?,
         };
+        self.oidc.validate()?;
         Ok(Listener {
+            oidc: self.oidc.clone(),
             max_loaded: self.max_loaded.map_or(1, |n| n.get()),
             inference: std::net::SocketAddr::new(
                 self.inference_host.unwrap_or(Ipv4Addr::LOCALHOST.into()),
@@ -137,14 +141,18 @@ pub fn cli(args: &[OsString]) -> Result<()> {
         return Ok(());
     }
     let path = path(user)?;
+    if args.len() == 1 && crate::oidc::Settings::keys().contains(&args[0]) {
+        println!("{}", Saved::load(&path)?.oidc.get(args[0]));
+        return Ok(());
+    }
     if args.is_empty()
         || matches!(
             args.as_slice(),
-            ["api.host"
+            ["admin.host"
+                | "admin.port"
+                | "admin.name"
+                | "api.host"
                 | "api.port"
-                | "api.name"
-                | "inference.host"
-                | "inference.port"
                 | "models.max_loaded"]
         )
     {
@@ -152,19 +160,25 @@ pub fn cli(args: &[OsString]) -> Result<()> {
         let name = l.name.as_deref().unwrap_or("-");
         match args.first().copied() {
             Some("models.max_loaded") => println!("{}", l.max_loaded),
-            Some("api.host") => println!("{}", l.host),
-            Some("api.port") => println!("{}", l.port),
-            Some("api.name") => println!("{name}"),
-            Some("inference.host") => println!("{}", l.inference.ip()),
-            Some("inference.port") => println!("{}", l.inference.port()),
-            _ => println!(
-                "api:\n  host: {}\n  port: {}\n  name: {name}\ninference:\n  host: {}\n  port: {}\nmodels:\n  max_loaded: {}",
-                l.host,
-                l.port,
-                l.inference.ip(),
-                l.inference.port(),
-                l.max_loaded
-            ),
+            Some("admin.host") => println!("{}", l.host),
+            Some("admin.port") => println!("{}", l.port),
+            Some("admin.name") => println!("{name}"),
+            Some("api.host") => println!("{}", l.inference.ip()),
+            Some("api.port") => println!("{}", l.inference.port()),
+            _ => {
+                println!(
+                    "admin:\n  host: {}\n  port: {}\n  name: {name}\napi:\n  host: {}\n  port: {}\nmodels:\n  max_loaded: {}",
+                    l.host,
+                    l.port,
+                    l.inference.ip(),
+                    l.inference.port(),
+                    l.max_loaded
+                );
+                println!("oidc:");
+                for k in crate::oidc::Settings::keys() {
+                    println!("  {}: {}", &k[5..], l.oidc.get(k));
+                }
+            }
         };
         return Ok(());
     }
@@ -172,15 +186,15 @@ pub fn cli(args: &[OsString]) -> Result<()> {
         matches!(
             args.as_slice(),
             [
-                "api.host"
+                "admin.host"
+                    | "admin.port"
+                    | "admin.name"
+                    | "api.host"
                     | "api.port"
-                    | "api.name"
-                    | "inference.host"
-                    | "inference.port"
                     | "models.max_loaded",
                 _
             ]
-        ),
+        ) || (args.len() == 2 && crate::oidc::Settings::keys().contains(&args[0])),
         "{USAGE}"
     );
     let parent = path.parent().context("Invalid config path")?;
@@ -192,18 +206,18 @@ pub fn cli(args: &[OsString]) -> Result<()> {
         .context("Configuration is busy; retry the command")?;
     let mut saved = Saved::load(&path)?;
     match args.as_slice() {
-        ["api.host", v] => {
+        ["admin.host", v] => {
             saved.host = Some(
                 v.parse()
-                    .context("api.host must be an IPv4 or IPv6 address")?,
+                    .context("admin.host must be an IPv4 or IPv6 address")?,
             )
         }
-        ["api.port", v] => saved.port = Some(v.parse().context("api.port must be 1–65535")?),
-        ["inference.host", v] => {
-            saved.inference_host = Some(v.parse().context("inference.host must be an IP address")?)
+        ["admin.port", v] => saved.port = Some(v.parse().context("admin.port must be 1–65535")?),
+        ["api.host", v] => {
+            saved.inference_host = Some(v.parse().context("api.host must be an IP address")?)
         }
-        ["inference.port", v] => {
-            saved.inference_port = Some(v.parse().context("inference.port must be 1–65535")?)
+        ["api.port", v] => {
+            saved.inference_port = Some(v.parse().context("api.port must be 1–65535")?)
         }
         ["models.max_loaded", v] => {
             saved.max_loaded = Some(
@@ -211,7 +225,8 @@ pub fn cli(args: &[OsString]) -> Result<()> {
                     .context("models.max_loaded must be a positive integer")?,
             )
         }
-        ["api.name", v] => saved.name = (*v != "-").then(|| v.to_ascii_lowercase()),
+        ["admin.name", v] => saved.name = (*v != "-").then(|| v.to_ascii_lowercase()),
+        [k, v] => saved.oidc.set(k, v)?,
         _ => unreachable!(),
     }
     saved.listener()?;
@@ -232,7 +247,7 @@ pub fn cli(args: &[OsString]) -> Result<()> {
     tmp.as_file().sync_all()?;
     tmp.persist(&path)?;
     lock.sync_all()?;
-    if saved.host.is_some_and(|h| !h.is_loopback()) {
+    if !saved.oidc.enabled && saved.host.is_some_and(|h| !h.is_loopback()) {
         eprintln!(
             "LAN access has no login. Anyone who can reach this listener can manage your models."
         );

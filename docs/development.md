@@ -27,6 +27,12 @@ Open **http://127.0.0.1:9399/**. Rust starts an isolated mock Loom engine and Vi
 
 Rust serves the same Vite bundle for `/`, `/chat/{alias}` and `/api`. Svelte checks `/admin/runtime` before mounting the requested screen and offers retry on failed setup. `/admin/state` returns model, transfer and system snapshots; `/admin/chat/{alias}`, `/admin/models/{alias}/{op}` and `/admin/downloads` accept same-origin JSON writes. `/admin/api` lists endpoint and key metadata; key creation and revocation are writes under `/admin/keys`. The plaintext secret is returned only on creation. Removal requires confirmation in the UI and is revalidated by the backend. No page is rendered from Rust templates. Do not expose `/admin` via the bearer-protected `/v1` listener.
 
+### Admin authentication boundary
+
+`src/oidc.rs` wraps the admin routes before the public login page and assets are added. The outer Host/Origin middleware runs even for the callback and logout. The inference router never receives the session store. `src/oidc/tests.rs` uses an ephemeral signing key and token endpoint to exercise PKCE and verified ID-token claims without a network provider. Never log tokens, cookie values, or callback query strings. Discovery uses HTTPS and refuses redirects in production.
+
+Dependency review: `openidconnect` 4.1 pulls in `rsa` 0.9 ([RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)) and `chrono` ([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html), unmaintained). Lum uses public keys to verify ID tokens and performs no RSA private-key signing or decryption. The repository's Rust advisory checks have not been suppressed; revisit the dependency chain before release.
+
 ## Validate
 
 ```sh

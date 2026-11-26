@@ -7,7 +7,7 @@ Lum is a web manager for local hrx-loom chat models. One Rust service lets you d
 ## Open Chat
 
 1. Follow the [installation guide](packaging/INSTALL.md) for Fedora 44 (RPM), Debian/Ubuntu (DEB), or a manual installation. Download the tested x86-64 packages, tarball and checksums from [GitHub Releases](https://github.com/dougmaitelli/lum/releases/latest). Lum installs a private, pinned Loom SDK on first start.
-2. Open **http://127.0.0.1:9390/** on the server, or [configure trusted LAN access](packaging/INSTALL.md#configure-the-listener) to use your workstation’s browser. The admin UI has no login and defaults to loopback.
+2. Open **http://127.0.0.1:9390/** on the server, or [configure trusted LAN access](packaging/INSTALL.md#configure-the-listener) to use your workstation’s browser. The admin UI defaults to loopback without login. For authenticated access, [enable OpenID Connect](packaging/INSTALL.md#optional-openid-connect-for-admin-access).
 3. Click **+ Add model**. Search `loom-fun` packages or paste a Hugging Face model link from a trusted publisher. Choose a preset if prompted, then click **Download**. The sidebar download button shows queued and active jobs, lets you cancel either, and closes the popover when the queue empties.
 4. Select the installed model and click **Load model** at the bottom of Chat. The message box appears when the model is ready. A green dot means *loaded*; a filled pin means *pinned*. The footer shows engine status and system-wide GPU VRAM usage when the driver reports it.
 
@@ -23,7 +23,7 @@ Chat keeps a separate conversation per model in the browser tab and shows elapse
 
 Load a model, then open **API keys** in the sidebar. Copy the client base URL (normally `http://127.0.0.1:9391/v1`), create a named key, and copy the secret before leaving the page. Set the client’s model to the loaded alias. The separate inference listener supports `GET /v1/models` and `POST /v1/chat/completions` for text messages, including `stream: true` with optional `stream_options: {"include_usage": true}`. Both require `Authorization: Bearer <key>`. Revoke a key on the same page to reject subsequent requests; no restart is needed.
 
-To serve another machine, configure [the inference listener](packaging/INSTALL.md#configure-the-listener), not the password-free admin listener. Keys protect inference only. Keep the admin UI restricted: anyone who can reach it can create and revoke keys.
+To serve another machine, configure [the inference listener](packaging/INSTALL.md#configure-the-listener), not the admin listener. Keys protect inference only. Without OIDC, anyone who can reach the admin listener can create and revoke keys; with OIDC, only allowed administrators can.
 
 ## Development
 

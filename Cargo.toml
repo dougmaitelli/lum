@@ -20,3 +20,4 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "process", "rt", "signal", "time", "net", "fs", "sync"] }
 
 tempfile = "3"
+openidconnect = "4.1.0"

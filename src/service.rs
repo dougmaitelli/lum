@@ -92,7 +92,11 @@ pub async fn run(foreground: bool) -> Result<()> {
             std::net::IpAddr::V6(ip) => format!("[{ip}]"),
             ip => ip.to_string(),
         });
-    let url = format!("http://{browser_host}:{}/", settings.port);
+    let url = if settings.oidc.enabled {
+        format!("{}/", settings.oidc.origin)
+    } else {
+        format!("http://{browser_host}:{}/", settings.port)
+    };
     eprintln!("Lum listener bound to {addr}");
     let lib = Library::open(&state)?;
     let sdk = Runtime::select(&state)?;
@@ -103,7 +107,7 @@ pub async fn run(foreground: bool) -> Result<()> {
     let (phase, rx) = watch::channel(Setup::Preparing);
     let retry = Arc::new(Notify::new());
     let max_loaded = settings.max_loaded;
-    let router = ui::router(app, settings, rx, retry.clone(), sdk.description())
+    let router = ui::router(app, settings, rx, retry.clone(), sdk.description())?
         .into_make_service_with_connect_info::<ui::Destination>();
     let mut term = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;

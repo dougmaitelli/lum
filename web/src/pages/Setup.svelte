@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SignOut from "../components/SignOut.svelte";
   import { retryRuntime, type RuntimeStatus } from "../api/admin";
   let { status, error }: { status: RuntimeStatus | undefined; error: string } = $props();
   let retrying = $state(false),
@@ -20,6 +21,7 @@
 <svelte:head><title>Runtime setup · Lum</title></svelte:head>
 <main class="notice">
   <h1>Runtime setup</h1>
+  {#if status?.oidc}<SignOut />{/if}
   {#if status}<h2>{status.runtime}</h2>{/if}
   {#if error}<p class="warning" role="alert">{error} · Reconnecting…</p>
   {:else if status?.setup.phase === "failed"}

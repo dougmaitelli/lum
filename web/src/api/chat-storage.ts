@@ -1,6 +1,14 @@
 import type { Model } from "./admin";
 
 const prefixes = ["lum.chat.", "lum.draft.", "lum.installation."];
+export function clearLocalChats() {
+  try {
+    for (const key of Object.keys(sessionStorage))
+      if (prefixes.some((p) => key.startsWith(p))) sessionStorage.removeItem(key);
+  } catch {
+    /* optional storage */
+  }
+}
 export function forgetChat(alias: string) {
   try {
     for (const prefix of prefixes) sessionStorage.removeItem(prefix + alias);

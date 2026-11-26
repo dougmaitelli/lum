@@ -76,36 +76,59 @@ The system service reads `/etc/lum/config.json` on startup. Read settings as a n
 
 ```sh
 lum config
-sudo lum config api.host 0.0.0.0
-sudo lum config api.name ai          # optional: allow http://ai:9390 as well as the server IP
+sudo lum config admin.host 0.0.0.0
+sudo lum config admin.name ai          # optional: allow http://ai:9390 as well as the server IP
 sudo systemctl restart lum.service
 ```
 
-Open `http://<server-ip>:9390/` or `http://ai:9390/` if that name resolves. **There is no web login: anyone who can reach that port can manage models and create or revoke inference keys.** Keep loopback (the default) unless the listener is restricted to trusted clients by your firewall or VPN. Host and browser origin checks remain in effect; they are not authentication. Lum does not open your firewall.
+Open `http://<server-ip>:9390/` or `http://ai:9390/` if that name resolves. **With OIDC disabled (the default), there is no web login: anyone who can reach that port can manage models and create or revoke inference keys.** Keep loopback (the default) unless the listener is restricted to trusted clients by your firewall or VPN. Host and browser origin checks remain in effect; they are not authentication. Lum does not open your firewall.
 
 `lum config` prints the effective settings grouped by prefix. For example:
 
 ```text
-api:
+admin:
   host: 0.0.0.0
   port: 9390
   name: ai
-inference:
+api:
   host: 127.0.0.1
   port: 9391
 models:
   max_loaded: 1
 ```
 
-`lum config api.host` reads one value; `sudo lum config api.port 9494` sets the port. To return to local-only access use `sudo lum config api.host 127.0.0.1` and `sudo lum config api.name -`. Restart after changes. The `api.*` settings control only the **admin HTTP listener**.
+`admin.*` controls the web UI and management endpoints; `api.*` controls the OpenAI-compatible inference API. To return administration to local-only access use `sudo lum config admin.host 127.0.0.1` and `sudo lum config admin.name -`. Restart after changes.
 
 By default one model may be loaded at a time. To allow two, run `sudo lum config models.max_loaded 2` and `sudo systemctl restart lum.service`. Use the pin icon on a model row to protect it from automatic unloading and load it on startup. Manual unload keeps the pin; removing the unloaded model also removes its pin. Loading another model replaces a registered unpinned model (in alias order), even with a spare slot. Lum waits for graceful retirement before loading the replacement. If only pinned models are loaded, Lum uses a free slot or refuses when full. Pins cannot exceed `models.max_loaded`. On restart Lum restores pins first, then previously loaded models up to the limit. If you lower the limit below the pin count, Lum keeps the earliest pins and logs the reduction. The limit does not restrict downloads or simultaneous requests to an already loaded model.
 
 The **API keys** sidebar page shows the inference base URL to use in your client. Load a model, create a named key there, copy it once, and supply it to an OpenAI-compatible client as its API key. SQLite stores only the key digest and metadata. Revoking a key blocks new requests immediately; it does not cancel a request already underway.
 
-To allow LAN clients while keeping administration local, leave `api.host` at loopback and set `sudo lum config inference.host <server-lan-ip>` (or `0.0.0.0` for all IPv4 interfaces). Optionally set `sudo lum config inference.port 9391`, then `sudo systemctl restart lum.service`. When using a wildcard bind, use the server’s reachable IP/hostname rather than `127.0.0.1` in remote clients. Expose only the inference port. HTTP does not encrypt bearer keys: use TLS at a reverse proxy or a secure tunnel on untrusted networks.
+To allow LAN clients while keeping administration local, leave `admin.host` at loopback and set `sudo lum config api.host <server-lan-ip>` (or `0.0.0.0` for all IPv4 interfaces). Optionally set `sudo lum config api.port 9391`, then `sudo systemctl restart lum.service`. When using a wildcard bind, use the server’s reachable IP/hostname rather than `127.0.0.1` in remote clients. Expose only the inference port. HTTP does not encrypt bearer keys: use TLS at a reverse proxy or a secure tunnel on untrusted networks.
 
-For `lum run`, use `lum config --user ...` (no sudo) and restart the foreground process. It reads `$XDG_CONFIG_HOME/lum/config.json` or `~/.config/lum/config.json`. An absolute `LUM_CONFIG_FILE` overrides the path for both the CLI and a process started with that variable. A saved `api.port` takes precedence over `LUM_ADMIN_PORT`; otherwise the environment or default `9390` applies. Existing runtime/device settings in `lum.env` continue to work.
+For `lum run`, use `lum config --user ...` (no sudo) and restart the foreground process. It reads `$XDG_CONFIG_HOME/lum/config.json` or `~/.config/lum/config.json`. An absolute `LUM_CONFIG_FILE` overrides the path for both the CLI and a process started with that variable. Saved `admin.port` and `api.port` take precedence over `LUM_ADMIN_PORT` and `LUM_INFERENCE_PORT`, respectively. Existing runtime/device settings in `lum.env` continue to work.
+
+## Optional OpenID Connect for admin access
+
+OIDC protects the admin pages, management APIs, runtime setup/retry, and `/metrics`. It does not change the separate bearer-key inference API. Enable it only after you have an HTTPS reverse proxy and an application registration at your identity provider.
+
+1. Choose a dedicated HTTPS origin, e.g. `https://lum.example.org`. Route **all paths** there to `http://127.0.0.1:9390` and preserve the original `Host` (including any nondefault external port). Keep `admin.host` on loopback when the proxy is on the server. Lum compares the actual Host and browser Origin to `oidc.origin`; it ignores forwarded host/proto headers. Do not log callback query strings, cookies, or authorization headers at the proxy.
+2. Register a web client with authorization code flow, PKCE S256, scope `openid`, and the **exact redirect URI** `https://lum.example.org/auth/callback` (GET/query response mode). Use the issuer URL from discovery, not the discovery document URL. Obtain each administrator's **`sub` for this issuer and client**, not their email, username, or group name. The comma-separated allowlist does not accept wildcard patterns. Being signed in at the provider alone never grants admin access.
+3. Configure the nonsecret settings. Replace all example values. If your provider uses a confidential client (`client_secret_basic`), put the secret alone in a file readable by `lum-svc` but not other users (for example `/etc/lum/oidc-secret`, `root:lum-svc`, mode `0640`). Configure **only its path**. For a public PKCE client, omit the secret-file command.
+
+   ```sh
+   sudo lum config oidc.issuer https://id.example.org/realms/home
+   sudo lum config oidc.origin https://lum.example.org
+   sudo lum config oidc.client_id lum
+   sudo lum config oidc.allowed_subjects 'first-admin-sub,second-admin-sub'
+   # Confidential clients only:
+   sudo lum config oidc.client_secret_file /etc/lum/oidc-secret
+   sudo lum config oidc.enabled true
+   sudo systemctl restart lum.service
+   ```
+
+4. Open the **HTTPS** origin and select **Sign in with OpenID Connect**. In a private browser window, visiting `/admin/state` directly should return `401` before login. Login remains required if the provider or engine is down. The login page and static frontend files are public; they contain no admin data. Scope your proxy to the admin listener, not the inference port.
+
+Sessions use secure, HTTP-only cookies, expire at the earlier of ID-token expiry or eight hours, and are invalidated by a Lum restart. **Sign out** ends the Lum session, not the provider SSO session. Change the allowlist and restart Lum to revoke admin sessions. To recover locally, fix settings with `sudo lum config`; only disable `oidc.enabled` if you have first restricted access to the listener **and its proxy**. Disabling OIDC restores password-free access. Use `lum config --user` for `lum run` instead of editing system settings.
 
 ## Open the web UI
 

@@ -121,9 +121,9 @@ pub fn router(
     phase: tokio::sync::watch::Receiver<Setup>,
     retry: Arc<tokio::sync::Notify>,
     runtime: String,
-) -> Router {
+) -> Result<Router> {
     let gate = phase.clone();
-    Router::new()
+    let routes = Router::new()
         .route("/admin/api", get(api_info))
         .route("/admin/keys", post(create_key))
         .route("/admin/keys/{id}/revoke", post(revoke_key))
@@ -158,11 +158,17 @@ pub fn router(
         .layer(Extension(RuntimeStatus {
             phase,
             retry,
+            oidc: listener.oidc.enabled,
             runtime,
         }))
         .route("/", get(index))
         .route("/api", get(index))
-        .route("/chat/{alias}", get(index))
+        .route("/chat/{alias}", get(index));
+    let mut routes = crate::oidc::protect(routes, &listener.oidc)?;
+    if listener.oidc.enabled {
+        routes = routes.route("/login", get(index));
+    }
+    Ok(routes
         .route("/favicon.svg", get(favicon))
         .route("/assets/chat.js", get(chat_bundle))
         .route("/assets/index.css", get(chat_css))
@@ -170,17 +176,18 @@ pub fn router(
         .layer(middleware::from_fn(move |req, next| {
             protect(req, next, listener.clone())
         }))
-        .with_state(app)
+        .with_state(app))
 }
 
 #[derive(Clone)]
 struct RuntimeStatus {
+    oidc: bool,
     phase: tokio::sync::watch::Receiver<Setup>,
     retry: Arc<tokio::sync::Notify>,
     runtime: String,
 }
 async fn runtime_status(Extension(s): Extension<RuntimeStatus>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({"runtime":s.runtime,"setup":s.phase.borrow().clone()}))
+    Json(serde_json::json!({"runtime":s.runtime,"oidc":s.oidc,"setup":s.phase.borrow().clone()}))
 }
 async fn runtime_retry(Extension(s): Extension<RuntimeStatus>) -> StatusCode {
     if matches!(*s.phase.borrow(), Setup::Failed(_)) {
@@ -246,16 +253,23 @@ async fn protect(req: Request<Body>, next: Next, listener: crate::config::Listen
         .headers()
         .get(header::ORIGIN)
         .and_then(|h| h.to_str().ok());
-    if !allowed || (!read_only && origin != Some(format!("http://{host}").as_str())) {
+    let trusted = if listener.oidc.enabled {
+        listener.oidc.origin.strip_prefix("https://") == Some(host)
+            && (read_only || origin == Some(listener.oidc.origin.as_str()))
+    } else {
+        allowed && (read_only || origin == Some(format!("http://{host}").as_str()))
+    };
+    if !trusted {
         return (
             StatusCode::FORBIDDEN,
-            "Use the server IP or configured api.name, and a same-origin form.",
+            "Use the server IP or configured admin.name, and a same-origin form.",
         )
             .into_response();
     }
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_SECURITY_POLICY,"default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'".parse().unwrap());
+    headers.insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
     headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response

@@ -1,4 +1,4 @@
-import type { Turn } from "./admin";
+import { adminFetch, type Turn } from "./admin";
 
 // SSE records and even individual UTF-8 characters can span network chunks.
 export async function streamReply(
@@ -8,7 +8,7 @@ export async function streamReply(
   signal: AbortSignal,
   append: (text: string) => void,
 ) {
-  const res = await fetch(`/admin/chat/${alias}`, {
+  const res = await adminFetch(`/admin/chat/${alias}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify({ prompt, history }),

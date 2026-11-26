@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import SignOut from "../components/SignOut.svelte";
+  let { oidc }: { oidc: boolean } = $props();
   import CopyableText from "../components/CopyableText.svelte";
   import { apiInfo, createKey, revokeKey, type ApiInfo } from "../api/admin";
   let info = $state<ApiInfo>(),
@@ -38,6 +40,7 @@
 <svelte:window onpagehide={() => (secret = "")} />
 <main class="notice api-page">
   <a href="/">← Chat</a>
+  {#if oidc}<SignOut />{/if}
   <h1>API management</h1>
   {#if error}<p class="warning" role="alert">{error}</p>{/if}
   {#if info}
@@ -49,8 +52,9 @@
     <section>
       <h2>API keys</h2>
       <p class="muted">
-        Keys grant inference access, not admin access. Anyone who can reach this admin UI can manage
-        keys.
+        Keys grant inference access, not admin access. {oidc
+          ? "Only signed-in Lum administrators can manage keys."
+          : "Anyone who can reach this admin UI can manage keys."}
       </p>
       <div class="key-row">
         <form

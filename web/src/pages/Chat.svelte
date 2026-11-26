@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import { snapshot, modelAction, type Snapshot } from "../api/admin";
   import { forgetChat, reconcileChats } from "../api/chat-storage";
+  import SignOut from "../components/SignOut.svelte";
+  let { oidc }: { oidc: boolean } = $props();
   import Conversation from "../components/Conversation.svelte";
   import StatusBar from "../components/StatusBar.svelte";
   import ModelSettings from "../components/ModelSettings.svelte";
@@ -198,6 +200,7 @@
     </nav>
     <div class="side-foot">
       <a class="button-link" href="/api">API keys</a>
+      {#if oidc}<SignOut />{/if}
       <button
         class="downloads-trigger"
         popovertarget="downloads"

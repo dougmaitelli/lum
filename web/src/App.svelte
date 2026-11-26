@@ -3,6 +3,7 @@
   import { runtimeStatus, type RuntimeStatus } from "./api/admin";
   import Chat from "./pages/Chat.svelte";
   import Api from "./pages/Api.svelte";
+  import Login from "./pages/Login.svelte";
   import Setup from "./pages/Setup.svelte";
   const path = location.pathname;
   let status = $state<RuntimeStatus>(),
@@ -19,7 +20,7 @@
       }
       if (!closed && status?.setup.phase !== "ready") timer = setTimeout(poll, 1500);
     }
-    void poll();
+    if (path !== "/login") void poll();
     return () => {
       closed = true;
       clearTimeout(timer);
@@ -27,10 +28,12 @@
   });
 </script>
 
-{#if status?.setup.phase !== "ready"}
+{#if path === "/login"}
+  <Login />
+{:else if status?.setup.phase !== "ready"}
   <Setup {status} {error} />
 {:else if path === "/api"}
-  <Api />
+  <Api oidc={status.oidc} />
 {:else}
-  <Chat />
+  <Chat oidc={status.oidc} />
 {/if}
