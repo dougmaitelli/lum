@@ -28,10 +28,17 @@ pub struct Live {
 #[derive(Deserialize)]
 pub struct Gate {
     pub admission: String,
+    pub phase: Option<String>,
 }
 impl Live {
+    pub fn failed(&self) -> bool {
+        matches!(self.registration.as_str(), "failed" | "release_failed")
+            || self.status.as_ref().and_then(|s| s.phase.as_deref()) == Some("failed")
+    }
     pub fn ready(&self) -> bool {
-        self.registration == "ready" && self.status.as_ref().is_some_and(|s| s.admission == "open")
+        !self.failed()
+            && self.registration == "ready"
+            && self.status.as_ref().is_some_and(|s| s.admission == "open")
     }
 }
 impl Native {

@@ -1,7 +1,7 @@
 //! Public inference surface: two explicit routes, never a proxy to Loom administration.
 use crate::{
     library::{Library, slug},
-    native::Native,
+    ui::{App, LoadDenied, Setup, readiness, request_load},
 };
 use axum::{
     Json, Router,
@@ -13,13 +13,19 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-pub fn router(lib: Library, engine: Native) -> Router {
+#[derive(Clone)]
+struct Api {
+    app: App,
+    max: usize,
+    phase: tokio::sync::watch::Receiver<Setup>,
+}
+pub fn router(app: App, max: usize, phase: tokio::sync::watch::Receiver<Setup>) -> Router {
     Router::new()
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat))
         .layer(DefaultBodyLimit::max(1024 * 1024))
-        .route_layer(middleware::from_fn_with_state(lib, authorize))
-        .with_state(engine)
+        .route_layer(middleware::from_fn_with_state(app.lib.clone(), authorize))
+        .with_state(Api { app, max, phase })
 }
 fn error(status: StatusCode, msg: &str, kind: &str) -> Response {
     (
@@ -65,24 +71,44 @@ async fn authorize(State(lib): State<Library>, req: Request, next: Next) -> Resp
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     response
 }
-async fn models(State(engine): State<Native>) -> Response {
-    match engine.status().await {
-        Ok(live) => {
-            let data: Vec<_> = live
+async fn models(State(api): State<Api>) -> Response {
+    match api.app.lib.run(Library::list).await {
+        Ok(installs) => {
+            let data: Vec<_> = installs
                 .into_iter()
-                .filter(|(_, v)| v.ready())
-                .map(|(id, _)| json!({"id":id,"object":"model","owned_by":"lum","created":0}))
+                .filter(|m| m.state == "installed")
+                .map(|m| json!({"id":m.alias,"object":"model","owned_by":"lum","created":0}))
                 .collect();
             Json(json!({"object":"list","data":data})).into_response()
         }
         Err(_) => error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Engine unavailable",
+            "Library unavailable",
             "server_error",
         ),
     }
 }
-async fn chat(State(engine): State<Native>, body: Result<Json<Value>, JsonRejection>) -> Response {
+async fn prepare(api: &Api, alias: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        matches!(*api.phase.borrow(), Setup::Ready),
+        "Runtime not ready"
+    );
+    if request_load(&api.app, alias, api.max).await? {
+        return Ok(());
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(300), async {
+        loop {
+            let live = api.app.engine.status().await?;
+            let model = live.get(alias).ok_or(LoadDenied::Retiring)?;
+            if readiness(model)? {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    })
+    .await?
+}
+async fn chat(State(api): State<Api>, body: Result<Json<Value>, JsonRejection>) -> Response {
     let body = match body {
         Ok(Json(v)) => v,
         Err(e) => {
@@ -104,7 +130,7 @@ async fn chat(State(engine): State<Native>, body: Result<Json<Value>, JsonReject
         })
     {
         return invalid(
-            "Use a loaded model alias and text messages with system, user or assistant roles",
+            "Use an installed model alias and text messages with system, user or assistant roles",
         );
     }
     if body.get("stream").is_some_and(|v| !v.is_boolean()) {
@@ -141,7 +167,26 @@ async fn chat(State(engine): State<Native>, body: Result<Json<Value>, JsonReject
         return invalid("Unsupported chat completion option");
     }
     let streaming = body["stream"] == true;
-    let response = match engine.completion(body).await {
+    if let Err(e) = prepare(&api, body["model"].as_str().unwrap()).await {
+        return match e.downcast_ref::<LoadDenied>() {
+            Some(reason) => {
+                let (status, kind) = match reason {
+                    LoadDenied::NotInstalled => (StatusCode::NOT_FOUND, "model_not_found"),
+                    LoadDenied::Full(_) | LoadDenied::Retiring => {
+                        (StatusCode::CONFLICT, "model_unavailable")
+                    }
+                    LoadDenied::Failed => (StatusCode::SERVICE_UNAVAILABLE, "model_load_error"),
+                };
+                error(status, &reason.to_string(), kind)
+            }
+            None => error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Model not ready. Check the model status in Lum and retry.",
+                "model_load_error",
+            ),
+        };
+    }
+    let response = match api.app.engine.completion(body).await {
         Ok(r) => r,
         Err(_) => {
             return error(

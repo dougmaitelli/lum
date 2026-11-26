@@ -188,7 +188,6 @@ pub async fn run(hot_reload: bool) -> Result<()> {
         .await
         .context("Bind mock inference listener; change LUM_DEV_INFERENCE_PORT if occupied")?;
     let native = Native::new(&socket)?;
-    let inference = crate::inference::router(lib.clone(), native.clone());
     let app = App::preview(lib, native)?;
     let addr = listener.local_addr()?;
     let ui_port = if hot_reload {
@@ -220,9 +219,9 @@ pub async fn run(hot_reload: bool) -> Result<()> {
         inference: api.local_addr()?,
         host: addr.ip(),
         port: ui_port,
-        name: None,
     };
     let (_tx, rx) = watch::channel(Setup::Ready);
+    let inference = crate::inference::router(app.clone(), cfg.max_loaded, rx.clone());
     let router = ui::router(app, cfg, rx, Arc::new(Notify::new()), "Mock runtime".into())?;
     let mut term = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;

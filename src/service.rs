@@ -83,15 +83,12 @@ pub async fn run(foreground: bool) -> Result<()> {
     settings.inference = api.local_addr()?;
     let addr = listener.local_addr()?;
     settings.port = addr.port();
-    let browser_host = settings
-        .name
-        .clone()
-        .unwrap_or_else(|| match settings.host {
-            std::net::IpAddr::V4(ip) if ip.is_unspecified() => "127.0.0.1".into(),
-            std::net::IpAddr::V6(ip) if ip.is_unspecified() => "[::1]".into(),
-            std::net::IpAddr::V6(ip) => format!("[{ip}]"),
-            ip => ip.to_string(),
-        });
+    let browser_host = match settings.host {
+        std::net::IpAddr::V4(ip) if ip.is_unspecified() => "127.0.0.1".into(),
+        std::net::IpAddr::V6(ip) if ip.is_unspecified() => "[::1]".into(),
+        std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+        ip => ip.to_string(),
+    };
     let url = if settings.oidc.enabled {
         format!("{}/", settings.oidc.origin)
     } else {
@@ -102,11 +99,11 @@ pub async fn run(foreground: bool) -> Result<()> {
     let sdk = Runtime::select(&state)?;
     let socket = runtime.join("engine.sock");
     let engine = Native::new(&socket)?;
-    let inference = crate::inference::router(lib.clone(), engine.clone());
     let app = App::new(lib.clone(), engine.clone(), sdk.clone())?;
     let (phase, rx) = watch::channel(Setup::Preparing);
     let retry = Arc::new(Notify::new());
     let max_loaded = settings.max_loaded;
+    let inference = crate::inference::router(app.clone(), max_loaded, rx.clone());
     let router = ui::router(app, settings, rx, retry.clone(), sdk.description())?
         .into_make_service_with_connect_info::<ui::Destination>();
     let mut term = signal(SignalKind::terminate())?;

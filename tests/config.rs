@@ -73,7 +73,7 @@ fn print_hierarchy_and_validate_before_writing() {
     assert!(!fs::read_to_string(file).unwrap().contains("credential"));
     assert_eq!(
         ok(dir, &[]),
-        "admin:\n  host: 0.0.0.0\n  port: 9494\n  name: -\napi:\n  host: 127.0.0.1\n  port: 9391\nmodels:\n  max_loaded: 3\noidc:\n  enabled: false\n  issuer: -\n  origin: -\n  client_id: -\n  allowed_subjects: -\n  client_secret_file: -\n"
+        "admin:\n  host: 0.0.0.0\n  port: 9494\napi:\n  host: 127.0.0.1\n  port: 9391\nmodels:\n  max_loaded: 3\n"
     );
     assert!(!config(dir, &["--reset-password"]).status.success());
 }
@@ -95,18 +95,14 @@ async fn oidc_gates_setup_and_admin_without_contacting_provider() {
         .local_addr()
         .unwrap()
         .port();
-    for (key, value) in [
-        ("oidc.issuer", "https://id.example"),
-        ("oidc.origin", "https://lum.example"),
-        ("oidc.client_id", "lum"),
-        ("oidc.allowed_subjects", "owner"),
-        ("oidc.enabled", "true"),
-        ("admin.port", &port.to_string()),
-    ] {
-        ok(dir, &[key, value]);
-    }
+    ok(dir, &["admin.port", &port.to_string()]);
     let _server = Server(
         Command::new(env!("CARGO_BIN_EXE_lum"))
+            .env("LUM_OIDC_ISSUER", "https://id.example")
+            .env("LUM_OIDC_ORIGIN", "https://lum.example")
+            .env("LUM_OIDC_CLIENT_ID", "lum")
+            .env("LUM_OIDC_ALLOWED_SUBJECTS", "owner")
+            .env("LUM_OIDC_ENABLED", "true")
             .arg("run")
             .env_remove("LUM_CONFIG_FILE")
             .env("XDG_CONFIG_HOME", dir)
@@ -190,7 +186,6 @@ async fn saved_lan_bind_needs_no_login_but_checks_host_and_origin() {
         .unwrap()
         .port();
     ok(dir, &["admin.port", &port.to_string()]);
-    ok(dir, &["admin.name", "ai"]);
     let _server = Server(
         Command::new(env!("CARGO_BIN_EXE_lum"))
             .arg("run")
@@ -220,7 +215,12 @@ async fn saved_lan_bind_needs_no_login_but_checks_host_and_origin() {
     .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     assert!(!r.headers().contains_key(header::WWW_AUTHENTICATE));
-    for (host, status) in [("ai", 200), ("127.0.0.1", 200), ("untrusted.test", 403)] {
+    for (host, status) in [
+        ("ai", 403),
+        ("localhost", 200),
+        ("127.0.0.1", 200),
+        ("untrusted.test", 403),
+    ] {
         assert_eq!(
             client
                 .get(&css)

@@ -243,10 +243,6 @@ async fn protect(req: Request<Body>, next: Next, listener: crate::config::Listen
             (ip.is_some() && ip == dest)
                 || (name.eq_ignore_ascii_case("localhost")
                     && dest.is_some_and(|ip| ip.is_loopback()))
-                || listener
-                    .name
-                    .as_ref()
-                    .is_some_and(|n| name.eq_ignore_ascii_case(n))
         });
     let read_only = matches!(*req.method(), Method::GET | Method::HEAD);
     let origin = req
@@ -262,7 +258,7 @@ async fn protect(req: Request<Body>, next: Next, listener: crate::config::Listen
     if !trusted {
         return (
             StatusCode::FORBIDDEN,
-            "Use the server IP or configured admin.name, and a same-origin form.",
+            "Unexpected Host or Origin for the admin listener.",
         )
             .into_response();
     }
@@ -502,13 +498,123 @@ fn replacement<'a>(
     let victim = candidates
         .filter_map(|(alias, pinned)| (!pinned).then_some(alias))
         .min();
-    ensure!(
-        victim.is_some() || registered < max,
-        "No replaceable model slot (models.max_loaded = {max}). Unload a model or unpin one first."
-    );
+    if victim.is_none() && registered >= max {
+        return Err(LoadDenied::Full(max).into());
+    }
     Ok(victim)
 }
+#[derive(Debug)]
+pub enum LoadDenied {
+    NotInstalled,
+    Full(usize),
+    Failed,
+    Retiring,
+}
+impl std::fmt::Display for LoadDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotInstalled => write!(f, "Model is not installed"),
+            Self::Full(max) => write!(
+                f,
+                "No replaceable model slot (models.max_loaded = {max}). Unload a model or unpin one first."
+            ),
+            Self::Failed => write!(
+                f,
+                "Loom failed to load this model. Check the admin UI or service journal before retrying."
+            ),
+            Self::Retiring => write!(f, "Model is unloading. Retry after it has stopped."),
+        }
+    }
+}
+impl std::error::Error for LoadDenied {}
+/// Both listeners share this gate and registration policy. A second request
+/// joins an existing registration rather than evicting or registering again.
+pub async fn request_load(app: &App, a: &str, max_loaded: usize) -> Result<bool> {
+    let guard = app.gate.clone().lock_owned().await;
+    let models = app.lib.run(Library::list).await?;
+    let m = models
+        .iter()
+        .find(|m| m.alias == a && m.state == "installed")
+        .ok_or(LoadDenied::NotInstalled)?;
+    let registrations = app.engine.status().await?;
+    if let Some(live) = registrations.get(a) {
+        return readiness(live);
+    }
+    let a = a.to_owned();
+    let preset = m.preset.clone();
+    let context_limit = m.context_limit;
+    let app = app.clone();
+    // Once destructive replacement starts, complete it even on disconnect.
+    tokio::spawn(async move {
+        let _guard = guard;
+        let a = a.as_str();
+        let victim = replacement(
+            registrations.len(),
+            max_loaded,
+            models
+                .iter()
+                .filter(|m| registrations.contains_key(&m.alias))
+                .map(|m| (m.alias.as_str(), m.pinned)),
+        )?;
+        let previous = victim.map(str::to_owned);
+        app.lib
+            .for_alias(a, move |lib, a| lib.load_intent(a, previous.as_deref()))
+            .await?;
+        let start = async {
+            if let Some(v) = victim {
+                if registrations[v].registration != "retiring" {
+                    app.engine.stop(v).await?;
+                }
+                tokio::time::timeout(Duration::from_secs(30), async {
+                    while app.engine.status().await?.contains_key(v) {
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await
+                .with_context(|| {
+                    format!("{v} is still unloading; retry once its requests finish")
+                })??;
+            }
+            app.engine
+                .register(a, &app.lib.package(a), &preset, context_limit)
+                .await
+        }
+        .await;
+        if let Err(err) = start {
+            // A timeout doesn't prove Loom rejected the change. Reconcile
+            // observed registrations; if offline leave persisted startup intent intact.
+            if let Ok(live) = app.engine.status().await {
+                let on = live.contains_key(a);
+                app.lib
+                    .for_alias(a, move |lib, a| lib.desired(a, on))
+                    .await?;
+                if let Some(v) =
+                    victim.filter(|v| live.get(*v).is_some_and(|r| r.registration != "retiring"))
+                {
+                    app.lib.for_alias(v, |lib, a| lib.desired(a, true)).await?;
+                }
+            }
+            return Err(err);
+        }
+        Ok(false)
+    })
+    .await?
+}
+pub fn readiness(live: &crate::native::Live) -> Result<bool> {
+    if live.failed() {
+        return Err(LoadDenied::Failed.into());
+    }
+    if live.registration == "retiring" {
+        return Err(LoadDenied::Retiring.into());
+    }
+    Ok(live.ready())
+}
 async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
+    if op == "start" {
+        request_load(app, a, max_loaded).await?;
+        return Ok(());
+    }
     let _guard = app.gate.lock().await;
     let m = app.model(a).await?;
     if matches!(op, "pin" | "unpin") {
@@ -521,62 +627,6 @@ async fn apply(app: &App, a: &str, op: &str, max_loaded: usize) -> Result<()> {
     let registrations = app.engine.status().await?;
     let registered = registrations.contains_key(a);
     match op {
-        "start" => {
-            ensure!(
-                m.state == "installed" && !registered,
-                "Package must be installed and stopped"
-            );
-            let models = app.lib.run(Library::list).await?;
-            let victim = replacement(
-                registrations.len(),
-                max_loaded,
-                models
-                    .iter()
-                    .filter(|m| registrations.contains_key(&m.alias))
-                    .map(|m| (m.alias.as_str(), m.pinned)),
-            )?;
-            let previous = victim.map(str::to_owned);
-            app.lib
-                .for_alias(a, move |lib, a| lib.load_intent(a, previous.as_deref()))
-                .await?;
-            let start = async {
-                if let Some(v) = victim {
-                    if registrations[v].registration != "retiring" {
-                        app.engine.stop(v).await?;
-                    }
-                    tokio::time::timeout(Duration::from_secs(30), async {
-                        while app.engine.status().await?.contains_key(v) {
-                            tokio::time::sleep(Duration::from_millis(150)).await;
-                        }
-                        Ok::<_, anyhow::Error>(())
-                    })
-                    .await
-                    .with_context(|| {
-                        format!("{v} is still unloading; retry once its requests finish")
-                    })??;
-                }
-                app.engine
-                    .register(a, &app.lib.package(a), &m.preset, m.context_limit)
-                    .await
-            }
-            .await;
-            if let Err(err) = start {
-                // A timeout doesn't prove Loom rejected the change. Reconcile
-                // observed registrations; if offline leave persisted startup intent intact.
-                if let Ok(live) = app.engine.status().await {
-                    let on = live.contains_key(a);
-                    app.lib
-                        .for_alias(a, move |lib, a| lib.desired(a, on))
-                        .await?;
-                    if let Some(v) = victim
-                        .filter(|v| live.get(*v).is_some_and(|r| r.registration != "retiring"))
-                    {
-                        app.lib.for_alias(v, |lib, a| lib.desired(a, true)).await?;
-                    }
-                }
-                return Err(err);
-            }
-        }
         "stop" => {
             app.lib.for_alias(a, |lib, a| lib.desired(a, false)).await?;
             if registered && registrations[a].registration != "retiring" {

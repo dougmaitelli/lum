@@ -21,7 +21,7 @@ Chat keeps a separate conversation per model in the browser tab and shows elapse
 
 ## Connect an OpenAI-compatible client
 
-Load a model, then open **API keys** in the sidebar. Copy the client base URL (normally `http://127.0.0.1:9391/v1`), create a named key, and copy the secret before leaving the page. Set the client’s model to the loaded alias. The separate inference listener supports `GET /v1/models` and `POST /v1/chat/completions` for text messages, including `stream: true` with optional `stream_options: {"include_usage": true}`. Both require `Authorization: Bearer <key>`. Revoke a key on the same page to reject subsequent requests; no restart is needed.
+Open **API keys** in the sidebar. Copy the client base URL (normally `http://127.0.0.1:9391/v1`), create a named key, and copy the secret before leaving the page. The model list includes every installed alias, even when unloaded. A completion request loads its model on demand and waits for readiness, using the same pin, replacement, and slot rules as **Load model**. Listing models does not load them. The separate inference listener supports `GET /v1/models` and `POST /v1/chat/completions` for text messages, including `stream: true` with optional `stream_options: {"include_usage": true}`. Both require `Authorization: Bearer <key>`. Revoke a key on the same page to reject subsequent requests; no restart is needed.
 
 To serve another machine, configure [the inference listener](packaging/INSTALL.md#configure-the-listener), not the admin listener. Keys protect inference only. Without OIDC, anyone who can reach the admin listener can create and revoke keys; with OIDC, only allowed administrators can.
 

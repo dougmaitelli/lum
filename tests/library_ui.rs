@@ -126,6 +126,20 @@ async fn check_inference(client: &Client, admin: &str, alias: &str) -> Result<()
             .status(),
         StatusCode::UNAUTHORIZED
     );
+    let action = |model: &str, op: &str| {
+        client
+            .post(format!("{admin}/admin/models/{model}/{op}"))
+            .header("Origin", admin)
+    };
+    action(alias, "stop").send().await?.error_for_status()?;
+    let stopped = |s: &serde_json::Value| {
+        s["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["alias"] == alias && m["registered"] == false)
+    };
+    until_state(client, admin, stopped).await?;
     let list: serde_json::Value = client
         .get(&models)
         .bearer_auth(&token)
@@ -141,6 +155,27 @@ async fn check_inference(client: &Client, admin: &str, alias: &str) -> Result<()
             .iter()
             .any(|m| m["id"] == alias)
     );
+    until_state(client, admin, stopped).await?; // discovery is read-only
+    if alias == "test" {
+        // Preview has a second installation and max_loaded=1.
+        action("Qwen3-8B", "start")
+            .send()
+            .await?
+            .error_for_status()?;
+        action("Qwen3-8B", "pin").send().await?.error_for_status()?;
+        let denied = client
+            .post(&chat)
+            .bearer_auth(&token)
+            .json(&serde_json::json!({"model":alias,"messages":[{"role":"user","content":"a"}]}))
+            .send()
+            .await?;
+        assert_eq!(denied.status(), StatusCode::CONFLICT);
+        assert!(denied.text().await?.contains("models.max_loaded"));
+        action("Qwen3-8B", "unpin")
+            .send()
+            .await?
+            .error_for_status()?;
+    }
     for streaming in [false, true] {
         let mut body = serde_json::json!({"model":alias,"messages":[{"role":"user","content":"a"}],"max_tokens":4,"stream":streaming});
         if streaming {

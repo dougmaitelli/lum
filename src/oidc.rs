@@ -13,7 +13,7 @@ use openidconnect::{
     PkceCodeVerifier, RedirectUrl, TokenResponse,
     core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     collections::HashMap,
     path::Path,
@@ -21,8 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Default, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Default, Clone)]
 pub struct Settings {
     pub enabled: bool,
     issuer: String,
@@ -32,47 +31,42 @@ pub struct Settings {
     client_secret_file: String,
 }
 impl Settings {
-    pub fn keys() -> &'static [&'static str] {
-        &[
-            "oidc.enabled",
-            "oidc.issuer",
-            "oidc.origin",
-            "oidc.client_id",
-            "oidc.allowed_subjects",
-            "oidc.client_secret_file",
-        ]
-    }
-    pub fn get(&self, k: &str) -> &str {
-        let v = match k {
-            "oidc.enabled" => return if self.enabled { "true" } else { "false" },
-            "oidc.issuer" => &self.issuer,
-            "oidc.origin" => &self.origin,
-            "oidc.client_id" => &self.client_id,
-            "oidc.allowed_subjects" => &self.allowed_subjects,
-            "oidc.client_secret_file" => &self.client_secret_file,
-            _ => unreachable!(),
-        };
-        if v.is_empty() { "-" } else { v }
-    }
-    pub fn set(&mut self, k: &str, v: &str) -> Result<()> {
-        if k == "oidc.enabled" {
-            self.enabled = v.parse().context("oidc.enabled must be true or false")?;
-        } else {
-            let slot = match k {
-                "oidc.issuer" => &mut self.issuer,
-                "oidc.origin" => &mut self.origin,
-                "oidc.client_id" => &mut self.client_id,
-                "oidc.allowed_subjects" => &mut self.allowed_subjects,
-                "oidc.client_secret_file" => &mut self.client_secret_file,
-                _ => unreachable!(),
-            };
-            *slot = if v == "-" {
-                String::new()
-            } else {
-                v.trim().to_owned()
-            };
+    pub fn from_env() -> Result<Self> {
+        fn read(key: &str) -> Result<Option<String>> {
+            match std::env::var(key) {
+                Ok(value) => Ok(Some(value.trim().to_owned())),
+                Err(std::env::VarError::NotPresent) => Ok(None),
+                Err(_) => anyhow::bail!("{key} must be valid UTF-8"),
+            }
         }
-        Ok(())
+        let flag = read("LUM_OIDC_ENABLED")?;
+        let cfg = Self {
+            enabled: flag
+                .as_deref()
+                .unwrap_or("false")
+                .parse()
+                .context("LUM_OIDC_ENABLED must be true or false")?,
+            issuer: read("LUM_OIDC_ISSUER")?.unwrap_or_default(),
+            origin: read("LUM_OIDC_ORIGIN")?.unwrap_or_default(),
+            client_id: read("LUM_OIDC_CLIENT_ID")?.unwrap_or_default(),
+            allowed_subjects: read("LUM_OIDC_ALLOWED_SUBJECTS")?.unwrap_or_default(),
+            client_secret_file: read("LUM_OIDC_CLIENT_SECRET_FILE")?.unwrap_or_default(),
+        };
+        ensure!(
+            flag.is_some()
+                || [
+                    &cfg.issuer,
+                    &cfg.origin,
+                    &cfg.client_id,
+                    &cfg.allowed_subjects,
+                    &cfg.client_secret_file
+                ]
+                .iter()
+                .all(|v| v.is_empty()),
+            "Set LUM_OIDC_ENABLED explicitly when configuring OIDC"
+        );
+        cfg.validate()?;
+        Ok(cfg)
     }
     pub fn validate(&self) -> Result<()> {
         for (s, origin) in [(&self.origin, true), (&self.issuer, false)] {
@@ -90,7 +84,7 @@ impl Settings {
                 if origin {
                     ensure!(
                         u.origin().ascii_serialization() == *s,
-                        "oidc.origin must be a canonical HTTPS origin without a trailing slash"
+                        "LUM_OIDC_ORIGIN must be a canonical HTTPS origin without a trailing slash"
                     );
                 }
             }
@@ -105,7 +99,7 @@ impl Settings {
                     && !self.origin.is_empty()
                     && !self.client_id.trim().is_empty()
                     && self.subjects().next().is_some()),
-            "Set oidc.issuer, oidc.origin, oidc.client_id and oidc.allowed_subjects before enabling OIDC"
+            "Set LUM_OIDC_ISSUER, LUM_OIDC_ORIGIN, LUM_OIDC_CLIENT_ID and LUM_OIDC_ALLOWED_SUBJECTS before enabling OIDC"
         );
         Ok(())
     }
@@ -235,7 +229,7 @@ pub fn protect<S: Clone + Send + Sync + 'static>(
         None
     } else {
         let s = std::fs::read_to_string(&cfg.client_secret_file)
-            .context("Read oidc.client_secret_file")?;
+            .context("Read LUM_OIDC_CLIENT_SECRET_FILE")?;
         ensure!(!s.trim().is_empty(), "OIDC secret file is empty");
         Some(ClientSecret::new(s.trim().to_owned()))
     };

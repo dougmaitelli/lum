@@ -93,6 +93,8 @@ pub(super) async fn status(State(app): State<App>) -> Ui<Json<Snapshot>> {
                 .and_then(|e| e["message"].as_str())
             {
                 model.error = message.to_owned();
+            } else if live.is_some_and(Live::failed) && model.error.is_empty() {
+                model.error = "Loom failed to load this model. Check journalctl -u lum.service -b for the engine diagnostic.".into();
             }
             ModelState {
                 model,
