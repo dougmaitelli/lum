@@ -83,17 +83,6 @@ pub async fn run(foreground: bool) -> Result<()> {
     settings.inference = api.local_addr()?;
     let addr = listener.local_addr()?;
     settings.port = addr.port();
-    let browser_host = match settings.host {
-        std::net::IpAddr::V4(ip) if ip.is_unspecified() => "127.0.0.1".into(),
-        std::net::IpAddr::V6(ip) if ip.is_unspecified() => "[::1]".into(),
-        std::net::IpAddr::V6(ip) => format!("[{ip}]"),
-        ip => ip.to_string(),
-    };
-    let url = if settings.oidc.enabled {
-        format!("{}/", settings.oidc.origin)
-    } else {
-        format!("http://{browser_host}:{}/", settings.port)
-    };
     eprintln!("Lum listener bound to {addr}");
     let lib = Library::open(&state)?;
     let sdk = Runtime::select(&state)?;
@@ -108,7 +97,6 @@ pub async fn run(foreground: bool) -> Result<()> {
         .into_make_service_with_connect_info::<ui::Destination>();
     let mut term = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
-    eprintln!("Lum setup: {url}");
     let mut child = None;
     let manager = async {
         loop {
@@ -119,7 +107,6 @@ pub async fn run(foreground: bool) -> Result<()> {
                 let ready = async {
                     restore(&engine, &lib, max_loaded).await?;
                     phase.send_replace(Setup::Ready);
-                    eprintln!("Lum library: {url}");
                     std::future::pending::<Result<()>>().await
                 };
                 tokio::select! {

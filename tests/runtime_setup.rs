@@ -52,9 +52,9 @@ async fn exercise_retry(real: Option<&std::path::Path>) -> Result<()> {
             if let Some(u) = fs::read_to_string(&log)
                 .unwrap()
                 .lines()
-                .find_map(|s| s.strip_prefix("Lum setup: "))
+                .find_map(|s| s.strip_prefix("Lum listener bound to "))
             {
-                break u.trim_end_matches('/').to_owned();
+                break format!("http://{u}");
             }
             sleep(Duration::from_millis(30)).await;
         }

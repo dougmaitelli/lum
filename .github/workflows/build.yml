@@ -90,8 +90,8 @@ jobs:
             test "$(stat -c %U:%G:%a /opt/lum/runtimes)" = lum-svc:lum-svc:700
             # Exercise the same unit-free path offered by the manual tarball.
             LUM_DEVICE=task XDG_DATA_HOME=/tmp/lum-ci /usr/bin/lum run >/tmp/lum.log 2>&1 & pid=$!
-            for i in $(seq 1 180); do grep -q "Lum library:" /tmp/lum.log && break; sleep 1; done
-            grep -q "Lum library:" /tmp/lum.log || { cat /tmp/lum.log; exit 1; }
+            for i in $(seq 1 180); do curl -fs http://127.0.0.1:9390/metrics >/dev/null && break; sleep 1; done
+            curl -fsS http://127.0.0.1:9390/metrics >/dev/null || { cat /tmp/lum.log; exit 1; }
             kill -TERM "$pid"; wait "$pid"
             test -x /tmp/lum-ci/lum/runtimes/0.3.0/bin/loom-serve
             dnf remove -y lum

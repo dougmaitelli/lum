@@ -37,7 +37,10 @@ async fn serve(dir: &Path) -> Result<(Server, String)> {
             .stderr(Stdio::from(fs::File::create(dir.join("log"))?))
             .spawn()?,
     );
-    address(server, dir, "Lum library: ").await
+    let (server, addr) = address(server, dir, "Lum listener bound to ").await?;
+    let url = format!("http://{addr}");
+    until_state(&Client::new(), &url, |s| s["online"] == true).await?;
+    Ok((server, url))
 }
 async fn address(server: Server, dir: &Path, prefix: &str) -> Result<(Server, String)> {
     let url = timeout(Duration::from_secs(10), async {
