@@ -469,6 +469,8 @@ async fn run_fetch(mut cmd: tokio::process::Command, log: &Mutex<Vec<u8>>) -> Re
 #[derive(Deserialize)]
 struct ModelSettings {
     label: String,
+    #[serde(default)]
+    disable_thinking: bool,
     context_limit: Option<i32>,
 }
 async fn model_settings(
@@ -483,7 +485,12 @@ async fn model_settings(
     }
     app.lib
         .for_alias(&alias, move |lib, a| {
-            lib.settings(a, &settings.label, settings.context_limit)
+            lib.settings(
+                a,
+                &settings.label,
+                settings.context_limit,
+                settings.disable_thinking,
+            )
         })
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -529,7 +536,11 @@ impl std::fmt::Display for LoadDenied {
 impl std::error::Error for LoadDenied {}
 /// Both listeners share this gate and registration policy. A second request
 /// joins an existing registration rather than evicting or registering again.
-pub async fn request_load(app: &App, a: &str, max_loaded: usize) -> Result<bool> {
+pub struct LoadState {
+    pub ready: bool,
+    pub disable_thinking: bool,
+}
+pub async fn request_load(app: &App, a: &str, max_loaded: usize) -> Result<LoadState> {
     let guard = app.gate.clone().lock_owned().await;
     let models = app.lib.run(Library::list).await?;
     let m = models
@@ -537,8 +548,12 @@ pub async fn request_load(app: &App, a: &str, max_loaded: usize) -> Result<bool>
         .find(|m| m.alias == a && m.state == "installed")
         .ok_or(LoadDenied::NotInstalled)?;
     let registrations = app.engine.status().await?;
+    let disable_thinking = m.disable_thinking;
     if let Some(live) = registrations.get(a) {
-        return readiness(live);
+        return Ok(LoadState {
+            ready: readiness(live)?,
+            disable_thinking,
+        });
     }
     let a = a.to_owned();
     let preset = m.preset.clone();
@@ -597,7 +612,10 @@ pub async fn request_load(app: &App, a: &str, max_loaded: usize) -> Result<bool>
             }
             return Err(err);
         }
-        Ok(false)
+        Ok(LoadState {
+            ready: false,
+            disable_thinking,
+        })
     })
     .await?
 }
@@ -698,7 +716,7 @@ fn response_text(reply: &serde_json::Value) -> Result<String> {
     );
 }
 async fn chat_result(app: &App, a: &str, c: Chat, streaming: bool) -> Result<Response> {
-    app.model(a).await?;
+    let model = app.model(a).await?;
     ensure!(
         app.engine.status().await?.get(a).is_some_and(|l| l.ready()),
         "Model is not loaded"
@@ -722,7 +740,7 @@ async fn chat_result(app: &App, a: &str, c: Chat, streaming: bool) -> Result<Res
         content: c.prompt,
     });
     if streaming {
-        let response = app.engine.completion(serde_json::json!({"model":a,"messages":turns,"stream":true,"stream_options":{"include_usage":true}})).await?;
+        let response = app.engine.completion(serde_json::json!({"model":a,"messages":turns,"stream":true,"stream_options":{"include_usage":true}}),model.disable_thinking).await?;
         ensure!(
             response.status().is_success(),
             "Loom {}: {}",
@@ -744,7 +762,10 @@ async fn chat_result(app: &App, a: &str, c: Chat, streaming: bool) -> Result<Res
             .into_response());
     }
     let start = Instant::now();
-    let reply = app.engine.chat(a, &serde_json::to_value(&turns)?).await?;
+    let reply = app
+        .engine
+        .chat(a, &serde_json::to_value(&turns)?, model.disable_thinking)
+        .await?;
     let sec = start.elapsed().as_secs_f64();
     turns.push(Turn {
         role: "assistant".into(),

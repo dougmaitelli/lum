@@ -3,6 +3,7 @@ export interface Model {
   installation: string;
   label: string;
   context_limit: number | null;
+  disable_thinking: boolean;
   repo: string;
   preset: string;
   revision: string;
@@ -44,8 +45,12 @@ export const post = <T>(path: string, data: unknown) =>
     body: JSON.stringify(data),
   });
 export const snapshot = () => request<Snapshot>("/admin/state");
-export const saveModelSettings = (alias: string, label: string, context_limit: number | null) =>
-  post<void>(`/admin/models/${alias}/settings`, { label, context_limit });
+export const saveModelSettings = (
+  alias: string,
+  label: string,
+  context_limit: number | null,
+  disable_thinking: boolean,
+) => post<void>(`/admin/models/${alias}/settings`, { label, context_limit, disable_thinking });
 export const modelAction = (alias: string, op: string) =>
   post<void>(`/admin/models/${alias}/${op}`, {});
 export const install = (repo: string, preset: string) =>

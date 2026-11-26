@@ -12,6 +12,7 @@ pub struct Model {
     pub installation: String,
     pub label: String,
     pub context_limit: Option<i32>,
+    pub disable_thinking: bool,
     pub repo: String,
     pub preset: String,
     pub revision: String,
@@ -51,6 +52,9 @@ impl Library {
         db.execute_batch("CREATE TABLE IF NOT EXISTS model_settings(alias TEXT PRIMARY KEY REFERENCES models(alias) ON DELETE CASCADE, label TEXT NOT NULL, context_limit INTEGER CHECK(context_limit > 0));")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS model_pins(alias TEXT NOT NULL PRIMARY KEY REFERENCES models(alias) ON DELETE CASCADE);")?;
         db.execute_batch(crate::keys::SCHEMA)?;
+        if !db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('model_settings') WHERE name='disable_thinking')", [], |r| r.get::<_,bool>(0))? {
+            db.execute_batch("ALTER TABLE model_settings ADD COLUMN disable_thinking INTEGER NOT NULL DEFAULT 0")?;
+        }
         if !db.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('models') WHERE name='installation')",
             [],
@@ -97,7 +101,7 @@ impl Library {
     pub fn list(&self) -> Result<Vec<Model>> {
         let db = self.db()?;
         let mut q = db.prepare(
-            "SELECT alias,repo,preset,revision,state,desired,error,COALESCE(label,''),context_limit,EXISTS(SELECT 1 FROM model_pins p WHERE p.alias=models.alias),installation FROM models LEFT JOIN model_settings USING(alias) ORDER BY alias",
+            "SELECT alias,repo,preset,revision,state,desired,error,COALESCE(label,''),context_limit,EXISTS(SELECT 1 FROM model_pins p WHERE p.alias=models.alias),installation,COALESCE(disable_thinking,0) FROM models LEFT JOIN model_settings USING(alias) ORDER BY alias",
         )?;
         Ok(q.query_map([], |r| {
             Ok(Model {
@@ -111,6 +115,7 @@ impl Library {
                 error: r.get(6)?,
                 label: r.get(7)?,
                 context_limit: r.get(8)?,
+                disable_thinking: r.get(11)?,
                 pinned: r.get(9)?,
             })
         })?
@@ -135,7 +140,13 @@ impl Library {
         );
         Ok(())
     }
-    pub fn settings(&self, alias: &str, label: &str, limit: Option<i32>) -> Result<()> {
+    pub fn settings(
+        &self,
+        alias: &str,
+        label: &str,
+        limit: Option<i32>,
+        disable_thinking: bool,
+    ) -> Result<()> {
         let label = label.trim();
         ensure!(
             label.chars().count() <= 64 && !label.chars().any(char::is_control),
@@ -145,7 +156,7 @@ impl Library {
             limit.is_none_or(|n| n > 0),
             "Context limit must be a positive integer"
         );
-        self.db()?.execute("INSERT INTO model_settings(alias,label,context_limit) VALUES(?,?,?) ON CONFLICT(alias) DO UPDATE SET label=excluded.label,context_limit=excluded.context_limit", params![alias,label,limit])?;
+        self.db()?.execute("INSERT INTO model_settings(alias,label,context_limit,disable_thinking) VALUES(?,?,?,?) ON CONFLICT(alias) DO UPDATE SET label=excluded.label,context_limit=excluded.context_limit,disable_thinking=excluded.disable_thinking", params![alias,label,limit,disable_thinking])?;
         Ok(())
     }
     pub fn revision(&self, a: &str, rev: &str) -> Result<()> {

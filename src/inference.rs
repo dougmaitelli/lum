@@ -88,20 +88,22 @@ async fn models(State(api): State<Api>) -> Response {
         ),
     }
 }
-async fn prepare(api: &Api, alias: &str) -> anyhow::Result<()> {
+async fn prepare(api: &Api, alias: &str) -> anyhow::Result<crate::ui::LoadState> {
     anyhow::ensure!(
         matches!(*api.phase.borrow(), Setup::Ready),
         "Runtime not ready"
     );
-    if request_load(&api.app, alias, api.max).await? {
-        return Ok(());
+    let mut load = request_load(&api.app, alias, api.max).await?;
+    if load.ready {
+        return Ok(load);
     }
     tokio::time::timeout(std::time::Duration::from_secs(300), async {
         loop {
             let live = api.app.engine.status().await?;
             let model = live.get(alias).ok_or(LoadDenied::Retiring)?;
             if readiness(model)? {
-                return Ok(());
+                load.ready = true;
+                return Ok(load);
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
@@ -147,7 +149,15 @@ async fn chat(State(api): State<Api>, body: Result<Json<Value>, JsonRejection>) 
             "stream_options requires streaming and accepts only a boolean include_usage",
         );
     }
+    if let Some(opts) = body.get("chat_template_kwargs")
+        && !opts
+            .as_object()
+            .is_some_and(|o| o.len() == 1 && opts["enable_thinking"].is_boolean())
+    {
+        return invalid("chat_template_kwargs accepts only a boolean enable_thinking");
+    }
     let allowed = [
+        "chat_template_kwargs",
         "model",
         "messages",
         "stream",
@@ -167,26 +177,29 @@ async fn chat(State(api): State<Api>, body: Result<Json<Value>, JsonRejection>) 
         return invalid("Unsupported chat completion option");
     }
     let streaming = body["stream"] == true;
-    if let Err(e) = prepare(&api, body["model"].as_str().unwrap()).await {
-        return match e.downcast_ref::<LoadDenied>() {
-            Some(reason) => {
-                let (status, kind) = match reason {
-                    LoadDenied::NotInstalled => (StatusCode::NOT_FOUND, "model_not_found"),
-                    LoadDenied::Full(_) | LoadDenied::Retiring => {
-                        (StatusCode::CONFLICT, "model_unavailable")
-                    }
-                    LoadDenied::Failed => (StatusCode::SERVICE_UNAVAILABLE, "model_load_error"),
-                };
-                error(status, &reason.to_string(), kind)
-            }
-            None => error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Model not ready. Check the model status in Lum and retry.",
-                "model_load_error",
-            ),
-        };
-    }
-    let response = match api.app.engine.completion(body).await {
+    let load = match prepare(&api, body["model"].as_str().unwrap()).await {
+        Ok(load) => load,
+        Err(e) => {
+            return match e.downcast_ref::<LoadDenied>() {
+                Some(reason) => {
+                    let (status, kind) = match reason {
+                        LoadDenied::NotInstalled => (StatusCode::NOT_FOUND, "model_not_found"),
+                        LoadDenied::Full(_) | LoadDenied::Retiring => {
+                            (StatusCode::CONFLICT, "model_unavailable")
+                        }
+                        LoadDenied::Failed => (StatusCode::SERVICE_UNAVAILABLE, "model_load_error"),
+                    };
+                    error(status, &reason.to_string(), kind)
+                }
+                None => error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Model not ready. Check the model status in Lum and retry.",
+                    "model_load_error",
+                ),
+            };
+        }
+    };
+    let response = match api.app.engine.completion(body, load.disable_thinking).await {
         Ok(r) => r,
         Err(_) => {
             return error(

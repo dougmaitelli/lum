@@ -15,7 +15,7 @@ Lum is a web manager for local hrx-loom chat models. One Rust service lets you d
 
 `models.max_loaded` defaults to **1**. Pin a model to load it on startup and protect it from automatic unloading. When you load another model, Lum replaces an unpinned one first, even if a slot is free. If only pinned models are loaded, Lum uses a free slot or refuses the load when full. You can manually unload a pinned model with the eject icon without losing its pin. See the [configuration guide](packaging/INSTALL.md#configure-the-listener) to change the limit.
 
-For an unloaded model, **… → Settings** lets you change its display label and context limit without changing its API model ID.
+For an unloaded model, **… → Settings** lets you change its display label and context limit without changing its API model ID. For a package that supports optional thinking (such as Qwen3.6), select **Disable thinking** to request direct answers in both browser chat and API clients. Otherwise Lum leaves the preset’s behavior unchanged. API clients can override that setting on a request with `"chat_template_kwargs": {"enable_thinking": true}` or `false` for the `enable_thinking` value.
 
 Chat keeps a separate conversation per model in the browser tab and shows elapsed time, completion tokens and end-to-end output tokens/s when Loom reports usage. Removing a model clears its conversation and draft; reinstalling under the same name starts fresh. Replies stream as they are generated. **Stop** interrupts the request and keeps any visible partial answer. Lum sends no browser reply budget; Loom’s model and context limits still apply. `/metrics` exposes native Prometheus text directly.
 

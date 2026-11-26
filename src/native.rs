@@ -132,7 +132,14 @@ impl Native {
         .await?;
         Ok(())
     }
-    pub async fn completion(&self, payload: Value) -> Result<reqwest::Response> {
+    pub async fn completion(
+        &self,
+        mut payload: Value,
+        disable_thinking: bool,
+    ) -> Result<reqwest::Response> {
+        if disable_thinking && payload.get("chat_template_kwargs").is_none() {
+            payload["chat_template_kwargs"] = json!({"enable_thinking":false});
+        }
         let client = if payload["stream"] == true {
             &self.stream
         } else {
@@ -144,9 +151,12 @@ impl Native {
             .send()
             .await?)
     }
-    pub async fn chat(&self, a: &str, messages: &Value) -> Result<Value> {
+    pub async fn chat(&self, a: &str, messages: &Value, disable_thinking: bool) -> Result<Value> {
         let r = self
-            .completion(json!({"model":a,"messages":messages,"stream":false}))
+            .completion(
+                json!({"model":a,"messages":messages,"stream":false}),
+                disable_thinking,
+            )
             .await?;
         if !r.status().is_success() {
             bail!("Loom {}: {}", r.status(), r.text().await?)
@@ -176,6 +186,7 @@ mod tests {
             "/v1/chat/completions",
             post(|Json(body): Json<Value>| async move {
                 if body["stream"] == true {
+                    assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
                     let pieces = futures_util::stream::unfold(0, |n| async move {
                         if n == 5 {
                             return None;
@@ -189,7 +200,7 @@ mod tests {
                     Body::from_stream(pieces).into_response()
                 } else {
                     tokio::time::sleep(Duration::from_millis(250)).await;
-                    Json(json!({"ok":true})).into_response()
+                    Json(json!({"options":body.get("chat_template_kwargs")})).into_response()
                 }
             }),
         );
@@ -198,9 +209,19 @@ mod tests {
         });
         let n =
             Native::with_timeouts(&path, Duration::from_millis(40), Duration::from_millis(200))?;
-        assert_eq!(n.chat("model", &json!([])).await?["ok"], true);
+        assert!(n.chat("model", &json!([]), false).await?["options"].is_null());
         assert_eq!(
-            n.completion(json!({"stream":true})).await?.text().await?,
+            n.chat("model", &json!([]), true).await?["options"],
+            json!({"enable_thinking":false})
+        );
+        assert_eq!(
+            n.completion(
+                json!({"stream":true,"chat_template_kwargs":{"enable_thinking":true}}),
+                true
+            )
+            .await?
+            .text()
+            .await?,
             "data\n".repeat(5)
         );
         server.abort();

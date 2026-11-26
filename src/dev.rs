@@ -171,7 +171,12 @@ pub async fn run(hot_reload: bool) -> Result<()> {
         lib.revision(a, REV)?;
         lib.finish(a, "installed", "")?;
     }
-    lib.settings("Llama-3-2-3B-Instruct", "Llama 3.2 3B Instruct", None)?;
+    lib.settings(
+        "Llama-3-2-3B-Instruct",
+        "Llama 3.2 3B Instruct",
+        None,
+        false,
+    )?;
     lib.desired("Qwen3-8B", true)?;
     let socket = dir.path().join("mock.sock");
     let private = UnixListener::bind(&socket)?;

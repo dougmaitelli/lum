@@ -6,12 +6,14 @@
   let alias = $state(""),
     label = $state(""),
     limit = $state<number | undefined>(),
+    disableThinking = $state(false),
     error = $state(""),
     busy = $state(false);
   export function open(model: Model) {
     alias = model.alias;
     label = model.label;
     limit = model.context_limit ?? undefined;
+    disableThinking = model.disable_thinking;
     error = "";
     dialog.showModal();
   }
@@ -19,7 +21,7 @@
     if (busy) return;
     busy = true;
     try {
-      await saveModelSettings(alias, label.trim(), limit ?? null);
+      await saveModelSettings(alias, label.trim(), limit ?? null, disableThinking);
       onsave();
       dialog.close();
     } catch (e) {
@@ -60,6 +62,14 @@
       Includes the prompt, chat history, and reply. Leave blank to use the model preset. Applies on
       the next load.
     </p>
+    <label class="thinking">
+      <input type="checkbox" bind:checked={disableThinking} />
+      Disable thinking
+    </label>
+    <p class="muted">
+      Request direct answers in chat and API clients. Leave unchecked for the preset default; not
+      all packages support this option.
+    </p>
     {#if error}<p role="alert" class="warning">{error}</p>{/if}
   </form>
   {#snippet actions()}<button
@@ -71,3 +81,15 @@
       Save
     </button>{/snippet}
 </Dialog>
+
+<style>
+  .thinking {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .thinking input {
+    width: auto;
+    min-height: 0;
+  }
+</style>

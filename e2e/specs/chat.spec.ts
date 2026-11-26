@@ -370,12 +370,18 @@ test("removal is confirmed, not triggered by navigation", async ({ page }) => {
   const dialog = page.getByRole("dialog", { name: "Model settings" });
   await dialog.getByLabel("Display label").fill("My model");
   await dialog.getByLabel("Context limit (tokens)").fill("2048");
+  await expect(dialog.getByLabel("Disable thinking")).not.toBeChecked();
+  await dialog.getByLabel("Disable thinking").check();
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("link", { name: "My model" })).toHaveAttribute(
     "href",
     "/chat/Llama-3-2-3B-Instruct",
   );
   await page.reload();
+  await page.getByRole("button", { name: "Options for My model" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(dialog.getByLabel("Disable thinking")).toBeChecked();
+  await dialog.getByRole("button", { name: "Close" }).click();
   const alias = "Llama-3-2-3B-Instruct";
   await page.evaluate((a) => {
     sessionStorage.setItem(
